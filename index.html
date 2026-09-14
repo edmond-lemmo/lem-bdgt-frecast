@@ -17977,7 +17977,14 @@ function LogSheet({ st, M, init, onSave, onSaveRule, onDelete, onClose }) {
     const [d, setD] = useState(init?.d || dnToISO(M.today));
     const [count, setCount] = useState(AFTERPAY_COUNT);
     const amtRef = useRef(null);
+    const bodyRef = useRef(null);
+    const [lockH, setLockH] = useState(null);
     useEffect(() => { setTimeout(() => amtRef.current?.focus(), 60); }, []);
+    // The Spend layout sets the height; the other types keep it, so the sheet never jumps.
+    useEffect(() => {
+        if (lockH == null && t === "spend" && bodyRef.current)
+            setLockH(bodyRef.current.offsetHeight);
+    }, [t, lockH]);
     const notes = (M.topNotes[c] || []).slice(0, 6);
     const type = t === "moneyIn" ? src : t;
     // Afterpay: the amount is the whole purchase, split into equal fortnightly payments.
@@ -17994,7 +18001,7 @@ function LogSheet({ st, M, init, onSave, onSaveRule, onDelete, onClose }) {
         const cat = type === "spend" ? c : type === "fromSav" ? "From savings" : type === "toSav" ? "To savings" : "From someone";
         onSave({ ...(init?.id ? init : {}), id: init?.id || uid(), t: type, c: cat, a: Math.round(amt * 100) / 100, n: n.trim(), d, ts: init?.ts || Date.now(), u: Date.now() });
     };
-    return (_jsxs(Sheet, { title: editing ? "Edit entry" : "Log", onClose: onClose, children: [_jsx(Seg, { label: "Type", value: t, onChange: setT, options: LOG_TYPES, small: true, wrap: true }), t === "moneyIn" && _jsxs(_Fragment, { children: [_jsx("p", { className: "lbl", children: "Where did it come from?" }), _jsx(Seg, { label: "Source", value: src, onChange: setSrc, options: SOURCES, small: true })] }), t === "spend" && _jsx("div", { className: "chips", role: "radiogroup", "aria-label": "Category", children: st.cats.map((x) => _jsx("button", { role: "radio", "aria-checked": c === x, className: c === x ? "on" : "", onClick: () => setC(x), children: x }, x)) }), t === "afterpay" && _jsx("p", { className: "lbl", children: "Total amount owing" }), _jsxs("div", { className: "amt", children: [_jsx("span", { children: "$" }), _jsx("input", { ref: amtRef, "aria-label": t === "afterpay" ? "Total amount owing" : "Amount", inputMode: "decimal", placeholder: "0.00", value: a, onChange: (e) => setA(clean(e.target.value)), onKeyDown: (e) => e.key === "Enter" && save() })] }), _jsx("input", { "aria-label": "Description", placeholder: type === "spend" ? "What was it?" : type === "in" ? "Who from?" : type === "afterpay" ? "What did you buy?" : "Note", value: n, onChange: (e) => setN(e.target.value) }), t === "spend" && notes.length > 0 && _jsx("div", { className: "chips notes", children: notes.map((x) => _jsx("button", { className: n === x.n ? "on" : "", onClick: () => setN(x.n), children: x.n }, x.n)) }), _jsxs("label", { className: "datefield", children: [t === "afterpay" ? "First payment" : "Date", _jsx("input", { type: "date", value: d, onChange: (e) => setD(e.target.value) })] }), t === "afterpay" && (_jsxs(_Fragment, { children: [_jsxs("div", { className: "set", children: [_jsx("span", { children: "Number of payments" }), _jsx(Seg, { label: "Number of payments", small: true, value: count, onChange: setCount, options: [[4, "4"], [5, "5"], [6, "6"], [8, "8"]] })] }), apDates.length > 0 ? (_jsxs("div", { className: "preview", children: [_jsxs("small", { children: [count, " payments of ", money(per, true), ", every second ", DOW_LONG[dowOf(isoToDn(d))]] }), _jsx("div", { children: apDates.map((o) => _jsx("span", { children: dl(o.dn, { weekday: "short", day: "numeric", month: "short" }) }, o.dn)) })] })) : _jsx("p", { className: "fine", children: "Enter the total and pick the first payment date." }), _jsx("p", { className: "fine", children: "This goes into your plan as a bill, so the forecast counts every payment. Nothing is taken out today." })] })), type === "fromSav" && _jsx("p", { className: "fine", children: "Goes into the spending account and comes straight off total savings." }), type === "in" && _jsx("p", { className: "fine", children: "Goes into the spending account. Savings are untouched." }), type === "toSav" && _jsx("p", { className: "fine", children: "Comes out of the spending account and adds to savings. Your regular transfer is already in the plan, so only log extras here." }), t === "afterpay"
+    return (_jsxs(Sheet, { title: editing ? "Edit entry" : "Log", onClose: onClose, children: [_jsx(Seg, { label: "Type", value: t, onChange: setT, options: LOG_TYPES, small: true, wrap: true }), _jsxs("div", { className: "logbody", ref: bodyRef, style: lockH ? { height: lockH } : undefined, children: [t === "moneyIn" && _jsxs(_Fragment, { children: [_jsx("p", { className: "lbl", children: "Where did it come from?" }), _jsx(Seg, { label: "Source", value: src, onChange: setSrc, options: SOURCES, small: true })] }), t === "spend" && _jsx("div", { className: "chips", role: "radiogroup", "aria-label": "Category", children: st.cats.map((x) => _jsx("button", { role: "radio", "aria-checked": c === x, className: c === x ? "on" : "", onClick: () => setC(x), children: x }, x)) }), t === "afterpay" && _jsx("p", { className: "lbl", children: "Total amount owing" }), _jsxs("div", { className: "amt", children: [_jsx("span", { children: "$" }), _jsx("input", { ref: amtRef, "aria-label": t === "afterpay" ? "Total amount owing" : "Amount", inputMode: "decimal", placeholder: "0.00", value: a, onChange: (e) => setA(clean(e.target.value)), onKeyDown: (e) => e.key === "Enter" && save() })] }), _jsx("input", { "aria-label": "Description", placeholder: type === "spend" ? "What was it?" : type === "in" ? "Who from?" : type === "afterpay" ? "What did you buy?" : "Note", value: n, onChange: (e) => setN(e.target.value) }), t === "spend" && notes.length > 0 && _jsx("div", { className: "chips notes", children: notes.map((x) => _jsx("button", { className: n === x.n ? "on" : "", onClick: () => setN(x.n), children: x.n }, x.n)) }), _jsxs("label", { className: "datefield", children: [t === "afterpay" ? "First payment" : "Date", _jsx("input", { type: "date", value: d, onChange: (e) => setD(e.target.value) })] }), t === "afterpay" && (_jsxs(_Fragment, { children: [_jsxs("div", { className: "set", children: [_jsx("span", { children: "Number of payments" }), _jsx(Seg, { label: "Number of payments", small: true, value: count, onChange: setCount, options: [[4, "4"], [5, "5"], [6, "6"], [8, "8"]] })] }), apDates.length > 0 ? (_jsxs("div", { className: "preview", children: [_jsxs("small", { children: [count, " payments of ", money(per, true), ", every second ", DOW_LONG[dowOf(isoToDn(d))]] }), _jsx("div", { children: apDates.map((o) => _jsx("span", { children: dl(o.dn, { weekday: "short", day: "numeric", month: "short" }) }, o.dn)) })] })) : _jsx("p", { className: "fine", children: "Enter the total and pick the first payment date." }), _jsx("p", { className: "fine", children: "This goes into your plan as a bill, so the forecast counts every payment. Nothing is taken out today." })] })), type === "fromSav" && _jsx("p", { className: "fine", children: "Goes into the spending account and comes straight off total savings." }), type === "in" && _jsx("p", { className: "fine", children: "Goes into the spending account. Savings are untouched." }), type === "toSav" && _jsx("p", { className: "fine", children: "Comes out of the spending account and adds to savings. Your regular transfer is already in the plan, so only log extras here." })] }), t === "afterpay"
                 ? _jsxs("button", { className: "primary wide", disabled: !+a || !d, onClick: () => onSaveRule(apRule), children: ["Add ", count, " payments of ", money(per, true)] })
                 : _jsx("button", { className: "primary wide", disabled: !+a, onClick: save, children: editing ? "Save changes" : `Log ${+a ? money(+a, true) : ""}` }), editing && _jsx("button", { className: "danger wide", onClick: () => onDelete(init), children: "Delete entry" })] }));
 }
@@ -18071,6 +18078,7 @@ function MoneyApp() {
     const [sel, setSel] = useState(null);
     const [SC, setSC] = useState({ cut: 0, adds: [], skips: {} });
     const [modal, setModal] = useState(null);
+    const [closing, setClosing] = useState(false);
     const [toast, setToast] = useState(null);
     const [storageOk, setStorageOk] = useState(true);
     const saveTimer = useRef(null);
@@ -18156,6 +18164,10 @@ function MoneyApp() {
         document.addEventListener("visibilitychange", vis);
         return () => { clearInterval(id); document.removeEventListener("visibilitychange", vis); };
     }, [st?.settings.shared, st?.updated]);
+    const shut = useCallback(() => {
+        setClosing(true);
+        setTimeout(() => { setModal(null); setClosing(false); }, 160);
+    }, []);
     const M = useMemo(() => (st ? buildModel(st, SC) : null), [st, SC]);
     useEffect(() => { if (M && (sel === null || sel < M.today))
         setSel(M.today); }, [M, sel]);
@@ -18166,16 +18178,16 @@ function MoneyApp() {
     const saveLog = (l) => {
         const existed = st.logs.some((x) => x.id === l.id);
         up((s) => ({ ...s, lastCat: l.t === "spend" ? l.c : s.lastCat, logs: existed ? s.logs.map((x) => (x.id === l.id ? l : x)) : [...s.logs, l] }));
-        setModal(null);
+        shut();
         flash(existed ? "Saved" : `Logged ${money(l.a, true)}${l.n ? ` ${l.n.toLowerCase()}` : ""}`, existed ? null : () => up((s) => ({ ...s, logs: s.logs.filter((x) => x.id !== l.id), deleted: [...(s.deleted || []), l.id] })));
     };
     const deleteLog = (l) => {
         up((s) => ({ ...s, logs: s.logs.filter((x) => x.id !== l.id), deleted: [...(s.deleted || []), l.id] }));
-        setModal(null);
+        shut();
         flash("Entry deleted", () => up((s) => ({ ...s, logs: [...s.logs, l], deleted: (s.deleted || []).filter((x) => x !== l.id) })));
     };
-    const saveRule = (r) => { up((s) => ({ ...s, rules: s.rules.some((x) => x.id === r.id) ? s.rules.map((x) => (x.id === r.id ? r : x)) : [...s.rules, r] }), true); setModal(null); flash(`${r.name} saved`); };
-    const deleteRule = (r) => { up((s) => ({ ...s, rules: s.rules.filter((x) => x.id !== r.id) }), true); setModal(null); flash(`${r.name} removed`, () => up((s) => ({ ...s, rules: [...s.rules, r] }), true)); };
+    const saveRule = (r) => { up((s) => ({ ...s, rules: s.rules.some((x) => x.id === r.id) ? s.rules.map((x) => (x.id === r.id ? r : x)) : [...s.rules, r] }), true); shut(); flash(`${r.name} saved`); };
+    const deleteRule = (r) => { up((s) => ({ ...s, rules: s.rules.filter((x) => x.id !== r.id) }), true); shut(); flash(`${r.name} removed`, () => up((s) => ({ ...s, rules: [...s.rules, r] }), true)); };
     const setPending = (key, pending) => up((s) => {
         const o = { ...s.overrides };
         const rest = { ...(o[key] || {}) };
@@ -18191,9 +18203,9 @@ function MoneyApp() {
     const saveOverride = (key, v) => { up((s) => { const o = { ...s.overrides }; if (v)
         o[key] = v;
     else
-        delete o[key]; return { ...s, overrides: o }; }, true); setModal(null); };
+        delete o[key]; return { ...s, overrides: o }; }, true); shut(); };
     const setSettings = (p) => up((s) => ({ ...s, settings: { ...s.settings, ...p } }), true);
-    const setAnchor = (spending, savings) => { up((s) => ({ ...s, anchor: { d: dnToISO(M.today), ts: Date.now(), spending, savings, confirmed: true } }), true); setModal(null); flash("Balances saved"); };
+    const setAnchor = (spending, savings) => { up((s) => ({ ...s, anchor: { d: dnToISO(M.today), ts: Date.now(), spending, savings, confirmed: true } }), true); shut(); flash("Balances saved"); };
     const onShared = async (on) => {
         if (on) {
             const remote = migrate(await sGet(SHARED_KEY, true));
@@ -18206,7 +18218,7 @@ function MoneyApp() {
     const addToPlan = (a) => saveRule({ id: uid(), name: a.name, kind: "bill", amt: a.amt, freq: "once", start: a.d, group: "Planned", active: true });
     const openLog = (init) => setModal({ type: "log", init });
     const openOverride = (o) => o.key && setModal({ type: "override", o });
-    return (_jsxs("div", { className: "app", ref: rootRef, children: [_jsx("style", { children: CSS }), _jsx("div", { className: "scrim", "aria-hidden": "true" }), _jsxs("header", { className: "top", children: [_jsxs("div", { className: "datepill", children: [dl(M.today, { weekday: "long", day: "numeric", month: "long" }), st.settings.shared ? " · Shared" : ""] }), _jsx("button", { className: "icon", "aria-label": "Settings", onClick: () => setModal({ type: "settings" }), children: _jsxs("svg", { width: "20", height: "20", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", "aria-hidden": "true", children: [_jsx("path", { d: "M4 7h10M18 7h2M4 17h4M12 17h8" }), _jsx("circle", { cx: "16", cy: "7", r: "2" }), _jsx("circle", { cx: "10", cy: "17", r: "2" })] }) })] }), !storageOk && _jsx("div", { className: "note warn", children: "Changes can't be saved in this view. Open the published app, or copy a backup from settings before closing." }), _jsxs("main", { className: "tab-view", children: [tab === "overview" && _jsx(Overview, { st: st, M: M, sel: sel, setSel: setSel, openLog: openLog, openOverride: openOverride, onPending: setPending, go: setTab, openReconcile: () => setModal({ type: "reconcile" }), confirmAnchor: setAnchor }), tab === "forecast" && _jsx(Forecast, { st: st, M: M, setSettings: setSettings, SC: SC, setSC: setSC, openLog: openLog, addToPlan: addToPlan, openOverride: openOverride }), tab === "log" && _jsx(LogTab, { st: st, M: M, openLog: openLog, openOverride: openOverride, go: setTab }), tab === "plan" && _jsx(Plan, { st: st, M: M, editRule: (r) => setModal({ type: "rule", r }), editDaily: (cat) => setModal({ type: "daily", cat }), updRule: saveRule })] }, tab), _jsxs("nav", { className: "navbar", role: "tablist", "aria-label": "Sections", children: [NAV.map(([k, label, d]) => (_jsxs("button", { role: "tab", "aria-selected": tab === k, "aria-label": label, className: tab === k ? "on" : "", onClick: () => setTab(k), children: [_jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: d }) }), tab === k && _jsx("em", { children: label })] }, k))), _jsx("button", { className: "nav-add", onClick: () => openLog(null), "aria-label": "Log a spend or transfer", children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", "aria-hidden": "true", children: _jsx("path", { d: "M12 5v14M5 12h14" }) }) })] }), toast && _jsxs("div", { className: "toast", role: "status", children: [_jsx("span", { children: toast.msg }), toast.undo && _jsx("button", { onClick: () => { toast.undo(); setToast(null); }, children: "Undo" })] }), modal?.type === "log" && _jsx(LogSheet, { st: st, M: M, init: modal.init, onSave: saveLog, onSaveRule: saveRule, onDelete: deleteLog, onClose: () => setModal(null) }), modal?.type === "rule" && _jsx(RuleSheet, { st: st, rule: modal.r, today: M.today, onSave: saveRule, onDelete: deleteRule, onClose: () => setModal(null) }), modal?.type === "daily" && _jsx(DailySheet, { st: st, M: M, cat: modal.cat, onSave: (cat, cfg) => { up((s) => ({ ...s, daily: { ...s.daily, [cat]: cfg } }), true); setModal(null); }, onClose: () => setModal(null) }), modal?.type === "override" && _jsx(OverrideSheet, { o: modal.o, onSave: saveOverride, onClose: () => setModal(null) }), modal?.type === "reconcile" && _jsx(ReconcileSheet, { M: M, st: st, onSave: setAnchor, onClose: () => setModal(null) }), modal?.type === "settings" && _jsx(SettingsSheet, { st: st, setSettings: setSettings, storageOk: storageOk, onShared: onShared, onCats: (cats) => up((s) => ({ ...s, cats }), true), onRestore: (s) => { setSt({ ...migrate(s), updated: Date.now(), cfgUpdated: Date.now() }); setModal(null); flash("Backup restored"); }, onClose: () => setModal(null) })] }));
+    return (_jsxs("div", { className: "app", ref: rootRef, children: [_jsx("style", { children: CSS }), _jsxs("div", { className: "scrim", "aria-hidden": "true", children: [_jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("i", {})] }), _jsxs("header", { className: "top", children: [_jsxs("div", { className: "datepill", children: [dl(M.today, { weekday: "long", day: "numeric", month: "long" }), st.settings.shared ? " · Shared" : ""] }), _jsx("button", { className: "icon", "aria-label": "Settings", onClick: () => setModal({ type: "settings" }), children: _jsxs("svg", { width: "20", height: "20", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", "aria-hidden": "true", children: [_jsx("path", { d: "M4 7h10M18 7h2M4 17h4M12 17h8" }), _jsx("circle", { cx: "16", cy: "7", r: "2" }), _jsx("circle", { cx: "10", cy: "17", r: "2" })] }) })] }), tab !== "overview" && (_jsxs("div", { className: "scorebar", children: [_jsx("span", { children: "Current balance" }), _jsx("b", { className: M.spNow < 0 ? "short" : "", children: money(M.spNow, true) })] })), !storageOk && _jsx("div", { className: "note warn", children: "Changes can't be saved in this view. Open the published app, or copy a backup from settings before closing." }), _jsxs("main", { className: "tab-view", children: [tab === "overview" && _jsx(Overview, { st: st, M: M, sel: sel, setSel: setSel, openLog: openLog, openOverride: openOverride, onPending: setPending, go: setTab, openReconcile: () => setModal({ type: "reconcile" }), confirmAnchor: setAnchor }), tab === "forecast" && _jsx(Forecast, { st: st, M: M, setSettings: setSettings, SC: SC, setSC: setSC, openLog: openLog, addToPlan: addToPlan, openOverride: openOverride }), tab === "log" && _jsx(LogTab, { st: st, M: M, openLog: openLog, openOverride: openOverride, go: setTab }), tab === "plan" && _jsx(Plan, { st: st, M: M, editRule: (r) => setModal({ type: "rule", r }), editDaily: (cat) => setModal({ type: "daily", cat }), updRule: saveRule })] }, tab), _jsxs("nav", { className: "navbar", role: "tablist", "aria-label": "Sections", children: [NAV.map(([k, label, d]) => (_jsxs("button", { role: "tab", "aria-selected": tab === k, "aria-label": label, className: tab === k ? "on" : "", onClick: () => setTab(k), children: [_jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: d }) }), tab === k && _jsx("em", { children: label })] }, k))), _jsx("button", { className: "nav-add", onClick: () => openLog(null), "aria-label": "Log a spend or transfer", children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", "aria-hidden": "true", children: _jsx("path", { d: "M12 5v14M5 12h14" }) }) })] }), toast && _jsxs("div", { className: "toast", role: "status", children: [_jsx("span", { children: toast.msg }), toast.undo && _jsx("button", { onClick: () => { toast.undo(); setToast(null); }, children: "Undo" })] }), _jsxs("div", { className: `modal-shell${closing ? " closing" : ""}`, children: [modal?.type === "log" && _jsx(LogSheet, { st: st, M: M, init: modal.init, onSave: saveLog, onSaveRule: saveRule, onDelete: deleteLog, onClose: () => shut() }), modal?.type === "rule" && _jsx(RuleSheet, { st: st, rule: modal.r, today: M.today, onSave: saveRule, onDelete: deleteRule, onClose: () => shut() }), modal?.type === "daily" && _jsx(DailySheet, { st: st, M: M, cat: modal.cat, onSave: (cat, cfg) => { up((s) => ({ ...s, daily: { ...s.daily, [cat]: cfg } }), true); shut(); }, onClose: () => shut() }), modal?.type === "override" && _jsx(OverrideSheet, { o: modal.o, onSave: saveOverride, onClose: () => shut() }), modal?.type === "reconcile" && _jsx(ReconcileSheet, { M: M, st: st, onSave: setAnchor, onClose: () => shut() }), modal?.type === "settings" && _jsx(SettingsSheet, { st: st, setSettings: setSettings, storageOk: storageOk, onShared: onShared, onCats: (cats) => up((s) => ({ ...s, cats }), true), onRestore: (s) => { setSt({ ...migrate(s), updated: Date.now(), cfgUpdated: Date.now() }); shut(); flash("Backup restored"); }, onClose: () => shut() })] })] }));
 }
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap');
@@ -18214,7 +18226,7 @@ const CSS = `
   --blue:#0EB2FF;--yellow:#F5D04E;--pos:#3ED9A4;--neg:#FF6B8B;
   font-family:'Outfit',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;font-optical-sizing:auto;background:var(--bg);color:var(--ink);
   min-height:100vh;max-width:460px;margin:0 auto;
-  padding:calc(18px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px)) calc(118px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px));font-size:15px;line-height:1.5;font-variant-numeric:tabular-nums;box-sizing:border-box;
+  padding:calc(28px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px)) calc(150px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px));font-size:15px;line-height:1.5;font-variant-numeric:tabular-nums;box-sizing:border-box;
   overflow-x:hidden;touch-action:manipulation;-webkit-text-size-adjust:100%;text-size-adjust:100%}
 .app *{box-sizing:border-box;min-width:0;max-width:100%;touch-action:manipulation}
 .app ul,.app li{overflow-wrap:anywhere}
@@ -18222,10 +18234,28 @@ const CSS = `
 .app button:focus-visible,.app input:focus-visible,.app select:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 .app button:disabled{opacity:.35;cursor:default}
 
-.scrim{position:fixed;top:0;left:0;right:0;height:calc(env(safe-area-inset-top, 0px) + 10px);z-index:8;pointer-events:none;
-  background:linear-gradient(#030516 55%,rgba(3,5,22,.72) 80%,rgba(3,5,22,0));backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
-.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
-.datepill{background:linear-gradient(135deg,#0EA6F5 0%,#0B57C9 100%);border:1px solid #071B5E;border-radius:999px;padding:8px 16px;font-size:13.5px;font-weight:600;color:#fff}
+.scrim{position:fixed;top:0;left:0;right:0;height:calc(env(safe-area-inset-top, 0px) + 26px);z-index:8;pointer-events:none}
+.scrim span{position:absolute;left:0;right:0;top:0;bottom:0}
+.scrim span:nth-child(1){backdrop-filter:blur(0.5px);-webkit-backdrop-filter:blur(0.5px);
+  -webkit-mask-image:linear-gradient(#000 0%,#000 88%,transparent 100%);mask-image:linear-gradient(#000 0%,#000 88%,transparent 100%)}
+.scrim span:nth-child(2){backdrop-filter:blur(1.5px);-webkit-backdrop-filter:blur(1.5px);
+  -webkit-mask-image:linear-gradient(#000 0%,#000 62%,transparent 84%);mask-image:linear-gradient(#000 0%,#000 62%,transparent 84%)}
+.scrim span:nth-child(3){backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);
+  -webkit-mask-image:linear-gradient(#000 0%,#000 44%,transparent 68%);mask-image:linear-gradient(#000 0%,#000 44%,transparent 68%)}
+.scrim span:nth-child(4){backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  -webkit-mask-image:linear-gradient(#000 0%,#000 26%,transparent 52%);mask-image:linear-gradient(#000 0%,#000 26%,transparent 52%)}
+.scrim span:nth-child(5){backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  -webkit-mask-image:linear-gradient(#000 0%,#000 10%,transparent 36%);mask-image:linear-gradient(#000 0%,#000 10%,transparent 36%)}
+.scrim i{position:absolute;inset:0;background:linear-gradient(#030516 8%,rgba(3,5,22,.82) 42%,rgba(3,5,22,.42) 70%,rgba(3,5,22,0) 100%)}
+.top{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}
+.scorebar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;
+  padding:9px 16px;border-radius:999px;min-height:38px;color:#fff;
+  background:linear-gradient(135deg,#0EA6F5 0%,#0B57C9 100%);border:1px solid #071B5E;
+  box-shadow:0 8px 20px -14px rgba(14,178,255,.9)}
+.scorebar span{font-size:13px;opacity:.92}
+.scorebar b{font-size:16px;font-weight:700;white-space:nowrap}
+.scorebar .short{color:#FFD9E2}
+.datepill{background:none;border:1px solid rgba(255,255,255,.85);border-radius:999px;padding:8px 16px;font-size:13.5px;font-weight:200;color:#fff;letter-spacing:.01em}
 .icon{width:42px;height:42px;border-radius:50%;background:var(--card2)!important;display:grid!important;place-items:center;color:#fff;border:1px solid var(--line)}
 main{display:flex;flex-direction:column;gap:12px}
 @keyframes tabIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
@@ -18236,8 +18266,7 @@ main{display:flex;flex-direction:column;gap:12px}
 .tab-view>*:nth-child(n+4){animation-delay:.1s}
 
 .hero{border-radius:28px;padding:20px;color:#fff;position:relative;overflow:hidden;
-  background:radial-gradient(130% 100% at 85% 0%,#31C8FF 0%,rgba(49,200,255,0) 55%),linear-gradient(150deg,#0EA6F5 0%,#0B57C9 48%,#071B5E 100%);
-  box-shadow:0 20px 40px -22px rgba(14,178,255,.75)}
+  background:radial-gradient(130% 100% at 85% 0%,#31C8FF 0%,rgba(49,200,255,0) 55%),linear-gradient(150deg,#0EA6F5 0%,#0B57C9 48%,#071B5E 100%)}
 .hero-top{display:flex;justify-content:space-between;align-items:center;font-size:13.5px;opacity:.92;gap:10px}
 .hero-split{display:flex;justify-content:space-between;gap:14px;margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.18)}
 .hero-split small{display:block;font-size:12px;opacity:.8}
@@ -18327,7 +18356,7 @@ main{display:flex;flex-direction:column;gap:12px}
 
 .seg{display:flex;background:var(--card2);border-radius:999px;padding:4px;overflow-x:auto;scrollbar-width:none;border:1px solid var(--line)}
 .seg::-webkit-scrollbar{display:none}
-.seg.wrap{display:grid;grid-template-columns:1fr 1fr;gap:4px;border-radius:18px;overflow:visible}
+.seg.wrap{display:grid;grid-template-columns:1fr 1fr;gap:7px;border-radius:18px;overflow:visible;padding:5px}
 .seg.wrap button{border-radius:14px;flex:none}
 .seg button{padding:7px 10px;border-radius:999px;font-size:13px;font-weight:600;color:var(--muted);flex:1 0 auto;text-align:center;white-space:nowrap}
 .seg.sm button{padding:5px 11px;font-size:12.5px}
@@ -18411,32 +18440,47 @@ label.inline input{flex:1}
 .onboard{border:1px solid rgba(14,178,255,.4)}
 .onboard .form-row{margin-top:12px}
 
-.navbar{position:fixed;bottom:calc(18px + env(safe-area-inset-bottom, 0px));left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:6px;
+.navbar{position:fixed;bottom:calc(46px + env(safe-area-inset-bottom, 0px));left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:6px;
   background:rgba(19,24,50,.94);border:1px solid var(--line);border-radius:999px;padding:7px;z-index:10;
   box-shadow:0 16px 34px -14px rgba(0,0,0,.85);backdrop-filter:blur(14px)}
-.navbar button{min-width:46px;height:46px;padding:0 4px!important;border-radius:23px;display:flex!important;flex-direction:column;align-items:center;justify-content:center;gap:1px;color:var(--muted);transition:background .2s ease,color .2s ease,padding .2s ease}
-.navbar button svg{width:21px;height:21px;flex-shrink:0}
-.navbar button em{font-style:normal;font-size:9.5px;font-weight:600;letter-spacing:.01em;line-height:1;animation:tabIn .2s ease-out both}
-.navbar button.on{background:#fff!important;color:#05101F;padding:0 12px!important}
-.navbar button.on svg{width:18px;height:18px}
-.navbar button svg{transition:width .2s ease,height .2s ease}
+.navbar button{position:relative;width:46px;height:46px;border-radius:50%;display:grid!important;place-items:center;color:var(--muted);transition:background .2s ease,color .2s ease}
+.navbar button svg{width:21px;height:21px}
+.navbar button.on{background:#fff!important;color:#05101F}
+.navbar button em{position:absolute;top:calc(100% + 12px);left:50%;transform:translateX(-50%);
+  font-style:normal;font-size:10px;font-weight:600;line-height:1;white-space:nowrap;color:#fff;
+  max-width:none;width:max-content;text-align:center;
+  background:rgba(19,24,50,.94);border:1px solid var(--line);border-radius:999px;padding:5px 11px;
+  animation:navLabel .22s ease-out both}
+@keyframes navLabel{from{opacity:0;transform:translate(-50%,-6px) scale(.9)}to{opacity:1;transform:translate(-50%,0) scale(1)}}
 .nav-add{background:var(--blue)!important;color:#04121F!important}
 
-.toast{position:fixed;bottom:calc(92px + env(safe-area-inset-bottom, 0px));left:50%;transform:translateX(-50%);background:#fff;color:#05101F;border-radius:16px;padding:11px 15px;display:flex;gap:16px;align-items:center;font-size:14px;font-weight:600;z-index:11;box-shadow:0 12px 26px -10px rgba(0,0,0,.7);max-width:92%}
+.toast{position:fixed;bottom:calc(126px + env(safe-area-inset-bottom, 0px));left:50%;transform:translateX(-50%);background:#fff;color:#05101F;border-radius:16px;padding:11px 15px;display:flex;gap:16px;align-items:center;font-size:14px;font-weight:600;z-index:11;box-shadow:0 12px 26px -10px rgba(0,0,0,.7);max-width:92%}
 .toast button{color:#0B72B5!important;font-weight:700}
-.sheet-bg{position:fixed;inset:0;background:rgba(3,5,22,.72);display:flex;align-items:flex-end;justify-content:center;z-index:20;backdrop-filter:blur(3px)}
+.sheet-bg{position:fixed;inset:0;background:rgba(3,5,22,.72);display:flex;align-items:flex-end;justify-content:center;z-index:20;backdrop-filter:blur(3px);animation:fadeIn .18s ease-out both}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeOut{from{opacity:1}to{opacity:0}}
+@keyframes sheetIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@keyframes sheetOut{from{opacity:1;transform:none}to{opacity:0;transform:translateY(10px)}}
+.sheet{animation:sheetIn .2s ease-out both}
+.modal-shell.closing .sheet-bg{animation:fadeOut .16s ease-in both}
+.modal-shell.closing .sheet{animation:sheetOut .16s ease-in both}
 .sheet{background:#0B0E1E;border:1px solid var(--line);border-bottom:0;width:100%;max-width:460px;border-radius:28px 28px 0 0;padding:18px 18px calc(30px + env(safe-area-inset-bottom, 0px));max-height:90vh;overflow:auto;overflow-x:hidden}
 .sheet-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
 .sheet h2{font-size:18px;margin:0;font-weight:600}
 .sheet h3{font-size:13.5px;margin:22px 0 4px;color:var(--muted);font-weight:600}
 .sheet>input,.sheet>.form-row{margin-top:10px}
-.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
-.chips button{padding:8px 13px!important;border-radius:999px;background:var(--card2)!important;font-size:13.5px;font-weight:500;color:#C3C8DA;border:1px solid var(--line)}
+.logbody{overflow-y:auto;overflow-x:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.logbody::-webkit-scrollbar{display:none}
+.chips{display:flex;flex-wrap:wrap;gap:9px;margin-top:14px}
+.chips button{padding:7px 12px!important;border-radius:999px;background:var(--card2)!important;font-size:13px;font-weight:500;color:#C3C8DA;border:1px solid var(--line)}
 .chips button.on{background:var(--blue)!important;color:#04121F;border-color:transparent;font-weight:700}
 .chips.notes button{font-size:12.5px;padding:6px 11px!important}
+.chips.notes{gap:8px}
 .amt{display:flex;align-items:center;gap:6px;margin-top:16px;border-bottom:1px solid var(--line);padding-bottom:6px}
 .amt span{font-size:clamp(24px,8vw,30px);font-weight:600;color:var(--muted);flex-shrink:0}
 .app .amt input{font-size:clamp(26px,9vw,34px)!important;font-weight:700;border:0!important;background:none!important;padding:4px 0!important;border-radius:0}
+.app .amt input:focus,.app .amt input:focus-visible{outline:none!important;box-shadow:none!important}
+.amt:focus-within{border-bottom-color:rgba(255,255,255,.35)}
 .dow-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;margin:14px 0 4px}
 .dow-grid>div,.dow-grid label{display:flex;flex-direction:column;align-items:center;gap:4px;background:var(--card2);border-radius:14px;padding:9px 2px}
 .dow-grid small{font-size:11px;color:var(--muted);font-weight:600}
@@ -18447,8 +18491,8 @@ label.inline input{flex:1}
 .set.tg{flex-direction:row;justify-content:space-between;align-items:center}
 .err{color:var(--neg)!important;font-size:13px}
 @media (prefers-reduced-motion:reduce){
-  .tog,.tog span,.navbar button,.navbar button svg{transition:none}
-  .tab-view,.tab-view>*,.navbar button em{animation:none}
+  .tog,.tog span,.navbar button{transition:none}
+  .tab-view,.tab-view>*,.navbar button em,.sheet,.sheet-bg{animation:none}
 }
 `;
 
