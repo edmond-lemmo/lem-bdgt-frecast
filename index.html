@@ -17483,6 +17483,8 @@ function buildModel(state, SC = {}, todayOverride) {
     });
     const fixed = rules.filter((r) => r.kind !== "budget");
     fixed.forEach((r) => occurrences(r, A + 1, today, overrides).forEach((o) => {
+        if (overrides[o.key]?.pending)
+            return; // scheduled, but not in the account yet
         if (r.kind === "in")
             sp += o.amt;
         else if (r.kind === "save") {
@@ -17508,6 +17510,17 @@ function buildModel(state, SC = {}, todayOverride) {
     // 3. Events per future day
     const ev = {};
     const addEv = (dn, e) => (ev[dn] ||= []).push(e);
+    // Anything scheduled for today is already in the balance above, unless it is
+    // marked as not yet received, in which case today's projection adds it back.
+    fixed.forEach((r) => occurrences(r, today, today, overrides).forEach((o) => {
+        const pending = !!overrides[o.key]?.pending;
+        addEv(today, {
+            ...o, name: r.name, kind: r.kind, group: r.group, today: true, pending,
+            delta: pending ? (r.kind === "in" ? o.amt : -o.amt) : 0,
+            sav: pending && r.kind === "save" ? o.amt : 0,
+            shown: r.kind === "in" ? o.amt : o.amt,
+        });
+    }));
     fixed.forEach((r) => occurrences(r, today + 1, E, overrides).forEach((o) => {
         addEv(o.dn, { ...o, name: r.name, kind: r.kind, group: r.group, delta: r.kind === "in" ? o.amt : -o.amt, sav: r.kind === "save" ? o.amt : 0, skipped: !!skips[o.key] });
     }));
@@ -17870,22 +17883,28 @@ function BalanceChart({ M, buffer, compare }) {
     const h = hover != null ? data[hover] : null;
     return (_jsxs("div", { className: "chart", children: [_jsxs("div", { className: "chart-wrap", children: [_jsxs("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `${labels[0]} over the next ${Math.round(M.H / 7)} weeks`, onPointerDown: at, onPointerMove: (e) => e.buttons && at(e), onPointerLeave: () => setHover(null), children: [_jsx("defs", { children: _jsxs("linearGradient", { id: "cg", x1: "0", x2: "0", y1: "0", y2: "1", children: [_jsx("stop", { offset: "0", stopColor: "#0EB2FF", stopOpacity: ".38" }), _jsx("stop", { offset: "1", stopColor: "#0EB2FF", stopOpacity: "0" })] }) }), yTicks.map((v) => (_jsxs("g", { children: [_jsx("line", { x1: padL, x2: W - padR, y1: y(v), y2: y(v), stroke: "rgba(255,255,255,.07)" }), _jsx("text", { x: padL - 6, y: y(v) + 3.5, textAnchor: "end", fontSize: "9", fill: "#8C93AD", children: axisMoney(v) })] }, v))), lo < 0 && _jsx("line", { x1: padL, x2: W - padR, y1: y(0), y2: y(0), stroke: "#FF6B8B", strokeOpacity: ".55" }), _jsx("line", { x1: padL, x2: W - padR, y1: y(buffer), y2: y(buffer), stroke: "rgba(255,255,255,.22)", strokeDasharray: "3 4" }), _jsx("path", { d: `${path(kA)} L${x(n - 1)},${y(lo)} L${padL},${y(lo)} Z`, fill: "url(#cg)" }), _jsx("path", { d: path(kB), fill: "none", stroke: colB, strokeWidth: "1.6", strokeLinejoin: "round", strokeDasharray: compare ? "5 4" : undefined }), _jsx("path", { d: path(kA), fill: "none", stroke: "#0EB2FF", strokeWidth: "2.2", strokeLinejoin: "round" }), xTicks.map((i) => (_jsx("text", { x: x(i), y: H - 6, textAnchor: i === 0 ? "start" : i === n - 1 ? "end" : "middle", fontSize: "9", fill: "#8C93AD", children: dl(data[i].dn) }, i))), h && (_jsxs("g", { children: [_jsx("line", { x1: x(hover), x2: x(hover), y1: padT, y2: H - padB, stroke: "rgba(255,255,255,.35)" }), _jsx("circle", { cx: x(hover), cy: y(h[kA]), r: "3.6", fill: "#0EB2FF", stroke: "#0B0E1E", strokeWidth: "1.6" }), _jsx("circle", { cx: x(hover), cy: y(h[kB]), r: "3", fill: colB, stroke: "#0B0E1E", strokeWidth: "1.4" })] }))] }), h && (_jsxs("div", { className: "tip", style: { left: `${Math.min(76, Math.max(2, ((x(hover) - padL) / (W - padL - padR)) * 100))}%` }, children: [_jsx("b", { children: dl(h.dn, { weekday: "short", day: "numeric", month: "short" }) }), _jsxs("span", { children: [labels[0], " ", money(h[kA])] }), _jsxs("span", { children: [labels[1], " ", money(h[kB])] })] }))] }), _jsxs("div", { className: "legend", children: [_jsxs("span", { children: [_jsx("i", { style: { background: "#0EB2FF" } }), labels[0]] }), _jsxs("span", { children: [_jsx("i", { style: { background: colB } }), labels[1]] }), _jsxs("span", { children: [_jsx("i", { className: "dash" }), "$", buffer, " buffer"] })] })] }));
 }
-function DayItems({ day, openOverride, openLog, empty }) {
+function DayItems({ day, openOverride, openLog, onPending, empty }) {
     const items = [...day.events.filter((e) => !(e.kind === "budget" && e.left < 0.5)), ...day.cats.filter((c) => c.left > 0.5 || c.overridden).map((c) => ({ est: true, ...c }))];
     if (!items.length)
         return _jsx("p", { className: "fine", children: empty || "Nothing due, just your usual spending." });
-    return (_jsx("ul", { className: "items", children: items.map((e) => (_jsx("li", { children: _jsxs("button", { onClick: () => (e.kind === "log" ? openLog(e.log) : e.kind === "whatif" ? null : openOverride({
-                    key: e.key, name: e.est ? e.cat : e.name, dn: day.dn, amt: e.est ? e.planned : e.amt, daily: !!e.est, budget: e.kind === "budget", overridden: e.overridden,
-                })), children: [_jsx("span", { className: `dot ${e.est ? "est" : e.kind}`, "aria-hidden": "true" }), _jsxs("span", { className: "name", children: [_jsx(Name, { children: e.est ? e.cat : e.name }), _jsx("small", { children: e.est ? "Expected spending" : e.kind === "in" ? "Income" : e.kind === "save" ? "To savings" : e.kind === "budget" ? `Budget, ${money(e.spent)} used` : e.kind === "log" ? "Logged" : e.kind === "whatif" ? "What if" : "Bill" })] }), _jsxs("span", { className: e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "pos" : "", children: [e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "+" : "", money(e.est ? e.left : e.kind === "budget" ? e.left : e.amt)] })] }) }, e.key))) }));
+    return (_jsx("ul", { className: "items", children: items.map((e) => (_jsxs("li", { children: [_jsxs("button", { onClick: () => (e.kind === "log" ? openLog(e.log) : e.kind === "whatif" ? null : openOverride({
+                        key: e.key, name: e.est ? e.cat : e.name, dn: day.dn, amt: e.est ? e.planned : e.amt, daily: !!e.est, budget: e.kind === "budget", overridden: e.overridden,
+                    })), children: [_jsx("span", { className: `dot ${e.est ? "est" : e.kind}`, "aria-hidden": "true" }), _jsxs("span", { className: "name", children: [_jsx(Name, { children: e.est ? e.cat : e.name }), _jsx("small", { children: e.est ? "Expected spending"
+                                        : e.kind === "in" ? (e.today ? (e.pending ? "Income, not in yet" : "Income, in the account") : "Income")
+                                            : e.kind === "save" ? (e.today ? "To savings, already moved" : "To savings")
+                                                : e.kind === "budget" ? `Budget, ${money(e.spent)} used`
+                                                    : e.kind === "log" ? "Logged"
+                                                        : e.kind === "whatif" ? "What if"
+                                                            : e.today ? "Bill, already out" : "Bill" })] }), _jsxs("span", { className: e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "pos" : "", children: [e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "+" : "", money(e.est ? e.left : e.kind === "budget" ? e.left : e.amt)] })] }), e.today && e.kind === "in" && onPending && (_jsx(Toggle, { label: `${e.name} has landed in the account`, on: !e.pending, onChange: (v) => onPending(e.key, !v) }))] }, e.key))) }));
 }
 /* ---------- Overview ---------- */
-function Overview({ st, M, sel, setSel, openLog, openReconcile, confirmAnchor, openOverride, go }) {
+function Overview({ st, M, sel, setSel, openLog, openReconcile, confirmAnchor, openOverride, onPending, go }) {
     const S = st.settings, B = M.base;
     const day = M.days[Math.max(0, Math.min(sel - M.today, M.days.length - 1))];
     const spent = st.logs.filter((l) => l.t === "spend" && isoToDn(l.d) === day.dn).reduce((a, l) => a + l.a, 0);
     const isToday = day.dn === M.today;
     const maxWk = Math.max(...M.spendWk.map((s) => s.perWeek), 1);
-    return (_jsxs(_Fragment, { children: [!st.anchor.confirmed && _jsx(Onboard, { M: M, confirm: confirmAnchor }), _jsxs("section", { className: "hero", children: [_jsxs("div", { className: "hero-top", children: [_jsx("span", { children: "Available to spend" }), _jsxs("span", { className: "pill", children: [Math.round(M.H / 7), " weeks"] })] }), _jsx("div", { className: `hero-amt ${B.available < 0 ? "short" : ""}`, children: money(B.available) }), _jsxs("div", { className: "hero-legend", children: [_jsxs("span", { children: [_jsx("i", { className: "d1" }), "Saved ", money(M.svNow)] }), _jsxs("span", { children: [_jsx("i", { className: "d2" }), "In the account ", money(M.spNow, true)] })] }), _jsx("button", { className: "hero-btn", onClick: openReconcile, children: "Update balances" })] }), _jsxs("section", { className: "card", children: [_jsxs("div", { className: "stepper", children: [_jsx("button", { "aria-label": "Previous day", disabled: sel <= M.today, onClick: () => setSel(sel - 1), children: "\u2039" }), _jsxs("div", { children: [_jsx("b", { children: dayName(day.dn, M.today) }), _jsxs("small", { children: ["Balance ", money(day.base)] })] }), _jsx("button", { "aria-label": "Next day", disabled: sel >= M.today + M.H, onClick: () => setSel(sel + 1), children: "\u203A" })] }), _jsxs("div", { className: "day-sum", children: [_jsxs("div", { children: [_jsx("small", { children: isToday ? "Spent so far" : "Expected spending" }), _jsx("b", { children: money(isToday ? spent : day.est, isToday) })] }), _jsxs("div", { children: [_jsx("small", { children: isToday ? "Still expected" : "Bills due" }), _jsx("b", { children: money(isToday ? day.est : day.events.filter((e) => e.kind === "bill" || e.kind === "save").reduce((a, e) => a + e.amt, 0)) })] }), _jsxs("div", { children: [_jsx("small", { children: "Savings" }), _jsx("b", { children: money(day.savBase) })] })] }), _jsx(DayItems, { day: day, openOverride: openOverride, openLog: openLog, empty: isToday ? "Nothing left to expect today." : undefined }), sel !== M.today && _jsx("button", { className: "link", onClick: () => setSel(M.today), children: "Back to today" })] }), _jsxs("section", { className: "card bottom", children: [_jsxs("div", { className: "row-between", children: [_jsxs("div", { children: [_jsx("small", { children: "Lowest point" }), _jsx("b", { children: dl(B.lowDn, { weekday: "long", day: "numeric", month: "short" }) })] }), _jsxs("div", { className: "right", children: [_jsx("b", { className: B.lowest < 0 ? "neg" : "", children: money(B.lowest) }), _jsx("small", { children: B.payAfter ? `Before ${B.payAfter.name}` : "In the next " + Math.round(M.H / 7) + " weeks" })] })] }), _jsx(Runway, { M: M, buffer: S.buffer, selected: sel, onPick: setSel }), _jsx("p", { className: "fine", children: B.available < 0
+    return (_jsxs(_Fragment, { children: [!st.anchor.confirmed && _jsx(Onboard, { M: M, confirm: confirmAnchor }), _jsxs("section", { className: "hero", children: [_jsxs("div", { className: "hero-top", children: [_jsx("span", { children: "Current balance" }), _jsx("button", { className: "pill", onClick: openReconcile, children: "Update" })] }), _jsx("div", { className: "hero-amt", children: money(M.spNow, true) }), _jsxs("div", { className: "hero-split", children: [_jsxs("div", { children: [_jsx("small", { children: "Total saved" }), _jsx("b", { children: money(M.svNow) })] }), _jsxs("div", { className: "right", children: [_jsxs("small", { children: ["Available, ", Math.round(M.H / 7), " weeks"] }), _jsx("b", { className: B.available < 0 ? "short" : "", children: money(B.available) })] })] })] }), _jsxs("section", { className: "card", children: [_jsxs("div", { className: "stepper", children: [_jsx("button", { "aria-label": "Previous day", disabled: sel <= M.today, onClick: () => setSel(sel - 1), children: "\u2039" }), _jsxs("div", { children: [_jsx("b", { children: dayName(day.dn, M.today) }), _jsxs("small", { children: ["Balance ", money(day.base)] })] }), _jsx("button", { "aria-label": "Next day", disabled: sel >= M.today + M.H, onClick: () => setSel(sel + 1), children: "\u203A" })] }), _jsxs("div", { className: "day-sum", children: [_jsxs("div", { children: [_jsx("small", { children: isToday ? "Spent so far" : "Expected spending" }), _jsx("b", { children: money(isToday ? spent : day.est, isToday) })] }), _jsxs("div", { children: [_jsx("small", { children: isToday ? "Still expected" : "Bills due" }), _jsx("b", { children: money(isToday ? day.est : day.events.filter((e) => e.kind === "bill" || e.kind === "save").reduce((a, e) => a + e.amt, 0)) })] }), _jsxs("div", { children: [_jsx("small", { children: "Savings" }), _jsx("b", { children: money(day.savBase) })] })] }), _jsx(DayItems, { day: day, openOverride: openOverride, openLog: openLog, onPending: isToday ? onPending : null, empty: isToday ? "Nothing left to expect today." : undefined }), isToday && day.events.some((e) => e.kind === "in") && (_jsx("p", { className: "fine", children: "Switch the toggle off until the money actually lands. The balance above leaves it out while it's off, but the forecast still counts it today." })), sel !== M.today && _jsx("button", { className: "link", onClick: () => setSel(M.today), children: "Back to today" })] }), _jsxs("section", { className: "card bottom", children: [_jsxs("div", { className: "row-between", children: [_jsxs("div", { children: [_jsx("small", { children: "Lowest point" }), _jsx("b", { children: dl(B.lowDn, { weekday: "long", day: "numeric", month: "short" }) })] }), _jsxs("div", { className: "right", children: [_jsx("b", { className: B.lowest < 0 ? "neg" : "", children: money(B.lowest) }), _jsx("small", { children: B.payAfter ? `Before ${B.payAfter.name}` : "In the next " + Math.round(M.H / 7) + " weeks" })] })] }), _jsx(Runway, { M: M, buffer: S.buffer, selected: sel, onPick: setSel }), _jsx("p", { className: "fine", children: B.available < 0
                             ? `${money(-B.available)} short of your $${S.buffer} buffer, so that comes out of savings. Savings would sit around ${money(B.savRealAtLow)} then.`
                             : `You could spend ${money(B.available)} more and still keep $${S.buffer} in the account.` })] }), _jsxs("section", { className: "card", children: [_jsxs("div", { className: "row-between", children: [_jsx("h2", { children: "Where the money goes" }), _jsx("button", { className: "link", onClick: () => go("log"), children: "Log" })] }), _jsxs("p", { className: "fine", children: ["Per week, averaged over the last ", st.settings.weeks, " weeks."] }), _jsx("ul", { className: "bars", children: M.spendWk.slice(0, 6).map((s, j) => (_jsxs("li", { children: [_jsxs("div", { className: "row-between", children: [_jsx("span", { children: s.cat }), _jsx("span", { children: money(s.perWeek) })] }), _jsx(Bar, { value: s.perWeek, max: maxWk, color: CAT_COLORS[j % 6] })] }, s.cat))) }), _jsx("p", { className: "fine", children: M.oneOffWk > 1 ? `Plus about ${money(M.oneOffWk)} a week of one-offs over ${money(st.settings.cap)}, which aren't in the forecast.` : "No one-offs in that time." }), _jsx("h2", { className: "sub", children: "A typical week ahead" }), _jsxs("div", { className: "wk", children: [_jsxs("div", { children: [_jsx("small", { children: "Income" }), _jsx("b", { className: "pos", children: money(M.wk.income) })] }), _jsxs("div", { children: [_jsx("small", { children: "Bills" }), _jsx("b", { children: money(M.wk.bills) })] }), _jsxs("div", { children: [_jsx("small", { children: "Spending" }), _jsx("b", { children: money(M.wk.spending) })] }), _jsxs("div", { children: [_jsx("small", { children: "Savings" }), _jsx("b", { children: money(M.wk.saved) })] })] }), _jsx("p", { className: "fine", children: M.wk.left < 0 ? `That leaves you ${money(-M.wk.left)} short each week, which is what pulls money back out of savings.` : `That leaves about ${money(M.wk.left)} spare each week.` })] })] }));
 }
@@ -18157,6 +18176,18 @@ function MoneyApp() {
     };
     const saveRule = (r) => { up((s) => ({ ...s, rules: s.rules.some((x) => x.id === r.id) ? s.rules.map((x) => (x.id === r.id ? r : x)) : [...s.rules, r] }), true); setModal(null); flash(`${r.name} saved`); };
     const deleteRule = (r) => { up((s) => ({ ...s, rules: s.rules.filter((x) => x.id !== r.id) }), true); setModal(null); flash(`${r.name} removed`, () => up((s) => ({ ...s, rules: [...s.rules, r] }), true)); };
+    const setPending = (key, pending) => up((s) => {
+        const o = { ...s.overrides };
+        const rest = { ...(o[key] || {}) };
+        delete rest.pending;
+        if (pending)
+            o[key] = { ...rest, pending: true };
+        else if (Object.keys(rest).length)
+            o[key] = rest;
+        else
+            delete o[key];
+        return { ...s, overrides: o };
+    }, true);
     const saveOverride = (key, v) => { up((s) => { const o = { ...s.overrides }; if (v)
         o[key] = v;
     else
@@ -18175,7 +18206,7 @@ function MoneyApp() {
     const addToPlan = (a) => saveRule({ id: uid(), name: a.name, kind: "bill", amt: a.amt, freq: "once", start: a.d, group: "Planned", active: true });
     const openLog = (init) => setModal({ type: "log", init });
     const openOverride = (o) => o.key && setModal({ type: "override", o });
-    return (_jsxs("div", { className: "app", ref: rootRef, children: [_jsx("style", { children: CSS }), _jsxs("header", { className: "top", children: [_jsxs("div", { children: [_jsx("h1", { children: "Money" }), _jsxs("p", { children: [dl(M.today, { weekday: "long", day: "numeric", month: "long" }), st.settings.shared ? ", shared" : ""] })] }), _jsx("button", { className: "icon", "aria-label": "Settings", onClick: () => setModal({ type: "settings" }), children: _jsxs("svg", { width: "20", height: "20", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", "aria-hidden": "true", children: [_jsx("path", { d: "M4 7h10M18 7h2M4 17h4M12 17h8" }), _jsx("circle", { cx: "16", cy: "7", r: "2" }), _jsx("circle", { cx: "10", cy: "17", r: "2" })] }) })] }), !storageOk && _jsx("div", { className: "note warn", children: "Changes can't be saved in this view. Open the published app, or copy a backup from settings before closing." }), _jsxs("main", { children: [tab === "overview" && _jsx(Overview, { st: st, M: M, sel: sel, setSel: setSel, openLog: openLog, openOverride: openOverride, go: setTab, openReconcile: () => setModal({ type: "reconcile" }), confirmAnchor: setAnchor }), tab === "forecast" && _jsx(Forecast, { st: st, M: M, setSettings: setSettings, SC: SC, setSC: setSC, openLog: openLog, addToPlan: addToPlan, openOverride: openOverride }), tab === "log" && _jsx(LogTab, { st: st, M: M, openLog: openLog, openOverride: openOverride, go: setTab }), tab === "plan" && _jsx(Plan, { st: st, M: M, editRule: (r) => setModal({ type: "rule", r }), editDaily: (cat) => setModal({ type: "daily", cat }), updRule: saveRule })] }), _jsxs("nav", { className: "navbar", role: "tablist", "aria-label": "Sections", children: [NAV.map(([k, label, d]) => (_jsx("button", { role: "tab", "aria-selected": tab === k, "aria-label": label, className: tab === k ? "on" : "", onClick: () => setTab(k), children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: d }) }) }, k))), _jsx("button", { className: "nav-add", onClick: () => openLog(null), "aria-label": "Log a spend or transfer", children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", "aria-hidden": "true", children: _jsx("path", { d: "M12 5v14M5 12h14" }) }) })] }), toast && _jsxs("div", { className: "toast", role: "status", children: [_jsx("span", { children: toast.msg }), toast.undo && _jsx("button", { onClick: () => { toast.undo(); setToast(null); }, children: "Undo" })] }), modal?.type === "log" && _jsx(LogSheet, { st: st, M: M, init: modal.init, onSave: saveLog, onSaveRule: saveRule, onDelete: deleteLog, onClose: () => setModal(null) }), modal?.type === "rule" && _jsx(RuleSheet, { st: st, rule: modal.r, today: M.today, onSave: saveRule, onDelete: deleteRule, onClose: () => setModal(null) }), modal?.type === "daily" && _jsx(DailySheet, { st: st, M: M, cat: modal.cat, onSave: (cat, cfg) => { up((s) => ({ ...s, daily: { ...s.daily, [cat]: cfg } }), true); setModal(null); }, onClose: () => setModal(null) }), modal?.type === "override" && _jsx(OverrideSheet, { o: modal.o, onSave: saveOverride, onClose: () => setModal(null) }), modal?.type === "reconcile" && _jsx(ReconcileSheet, { M: M, st: st, onSave: setAnchor, onClose: () => setModal(null) }), modal?.type === "settings" && _jsx(SettingsSheet, { st: st, setSettings: setSettings, storageOk: storageOk, onShared: onShared, onCats: (cats) => up((s) => ({ ...s, cats }), true), onRestore: (s) => { setSt({ ...migrate(s), updated: Date.now(), cfgUpdated: Date.now() }); setModal(null); flash("Backup restored"); }, onClose: () => setModal(null) })] }));
+    return (_jsxs("div", { className: "app", ref: rootRef, children: [_jsx("style", { children: CSS }), _jsx("div", { className: "scrim", "aria-hidden": "true" }), _jsxs("header", { className: "top", children: [_jsxs("div", { className: "datepill", children: [dl(M.today, { weekday: "long", day: "numeric", month: "long" }), st.settings.shared ? " · Shared" : ""] }), _jsx("button", { className: "icon", "aria-label": "Settings", onClick: () => setModal({ type: "settings" }), children: _jsxs("svg", { width: "20", height: "20", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", "aria-hidden": "true", children: [_jsx("path", { d: "M4 7h10M18 7h2M4 17h4M12 17h8" }), _jsx("circle", { cx: "16", cy: "7", r: "2" }), _jsx("circle", { cx: "10", cy: "17", r: "2" })] }) })] }), !storageOk && _jsx("div", { className: "note warn", children: "Changes can't be saved in this view. Open the published app, or copy a backup from settings before closing." }), _jsxs("main", { className: "tab-view", children: [tab === "overview" && _jsx(Overview, { st: st, M: M, sel: sel, setSel: setSel, openLog: openLog, openOverride: openOverride, onPending: setPending, go: setTab, openReconcile: () => setModal({ type: "reconcile" }), confirmAnchor: setAnchor }), tab === "forecast" && _jsx(Forecast, { st: st, M: M, setSettings: setSettings, SC: SC, setSC: setSC, openLog: openLog, addToPlan: addToPlan, openOverride: openOverride }), tab === "log" && _jsx(LogTab, { st: st, M: M, openLog: openLog, openOverride: openOverride, go: setTab }), tab === "plan" && _jsx(Plan, { st: st, M: M, editRule: (r) => setModal({ type: "rule", r }), editDaily: (cat) => setModal({ type: "daily", cat }), updRule: saveRule })] }, tab), _jsxs("nav", { className: "navbar", role: "tablist", "aria-label": "Sections", children: [NAV.map(([k, label, d]) => (_jsxs("button", { role: "tab", "aria-selected": tab === k, "aria-label": label, className: tab === k ? "on" : "", onClick: () => setTab(k), children: [_jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: d }) }), tab === k && _jsx("em", { children: label })] }, k))), _jsx("button", { className: "nav-add", onClick: () => openLog(null), "aria-label": "Log a spend or transfer", children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", "aria-hidden": "true", children: _jsx("path", { d: "M12 5v14M5 12h14" }) }) })] }), toast && _jsxs("div", { className: "toast", role: "status", children: [_jsx("span", { children: toast.msg }), toast.undo && _jsx("button", { onClick: () => { toast.undo(); setToast(null); }, children: "Undo" })] }), modal?.type === "log" && _jsx(LogSheet, { st: st, M: M, init: modal.init, onSave: saveLog, onSaveRule: saveRule, onDelete: deleteLog, onClose: () => setModal(null) }), modal?.type === "rule" && _jsx(RuleSheet, { st: st, rule: modal.r, today: M.today, onSave: saveRule, onDelete: deleteRule, onClose: () => setModal(null) }), modal?.type === "daily" && _jsx(DailySheet, { st: st, M: M, cat: modal.cat, onSave: (cat, cfg) => { up((s) => ({ ...s, daily: { ...s.daily, [cat]: cfg } }), true); setModal(null); }, onClose: () => setModal(null) }), modal?.type === "override" && _jsx(OverrideSheet, { o: modal.o, onSave: saveOverride, onClose: () => setModal(null) }), modal?.type === "reconcile" && _jsx(ReconcileSheet, { M: M, st: st, onSave: setAnchor, onClose: () => setModal(null) }), modal?.type === "settings" && _jsx(SettingsSheet, { st: st, setSettings: setSettings, storageOk: storageOk, onShared: onShared, onCats: (cats) => up((s) => ({ ...s, cats }), true), onRestore: (s) => { setSt({ ...migrate(s), updated: Date.now(), cfgUpdated: Date.now() }); setModal(null); flash("Backup restored"); }, onClose: () => setModal(null) })] }));
 }
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap');
@@ -18191,24 +18222,30 @@ const CSS = `
 .app button:focus-visible,.app input:focus-visible,.app select:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 .app button:disabled{opacity:.35;cursor:default}
 
+.scrim{position:fixed;top:0;left:0;right:0;height:calc(env(safe-area-inset-top, 0px) + 10px);z-index:8;pointer-events:none;
+  background:linear-gradient(#030516 55%,rgba(3,5,22,.72) 80%,rgba(3,5,22,0));backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
 .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
-.top h1{font-size:21px;font-weight:700;letter-spacing:-.02em;margin:0}
-.top p{margin:0;color:var(--muted);font-size:12.5px}
+.datepill{background:linear-gradient(135deg,#0EA6F5 0%,#0B57C9 100%);border:1px solid #071B5E;border-radius:999px;padding:8px 16px;font-size:13.5px;font-weight:600;color:#fff}
 .icon{width:42px;height:42px;border-radius:50%;background:var(--card2)!important;display:grid!important;place-items:center;color:#fff;border:1px solid var(--line)}
 main{display:flex;flex-direction:column;gap:12px}
+@keyframes tabIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.tab-view{animation:tabIn .26s cubic-bezier(.22,.8,.3,1) both;will-change:opacity,transform}
+.tab-view>*{animation:tabIn .32s cubic-bezier(.22,.8,.3,1) both}
+.tab-view>*:nth-child(2){animation-delay:.035s}
+.tab-view>*:nth-child(3){animation-delay:.07s}
+.tab-view>*:nth-child(n+4){animation-delay:.1s}
 
 .hero{border-radius:28px;padding:20px;color:#fff;position:relative;overflow:hidden;
   background:radial-gradient(130% 100% at 85% 0%,#31C8FF 0%,rgba(49,200,255,0) 55%),linear-gradient(150deg,#0EA6F5 0%,#0B57C9 48%,#071B5E 100%);
   box-shadow:0 20px 40px -22px rgba(14,178,255,.75)}
 .hero-top{display:flex;justify-content:space-between;align-items:center;font-size:13.5px;opacity:.92;gap:10px}
+.hero-split{display:flex;justify-content:space-between;gap:14px;margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.18)}
+.hero-split small{display:block;font-size:12px;opacity:.8}
+.hero-split b{font-size:clamp(17px,5.4vw,21px);font-weight:700;white-space:nowrap}
 .pill{background:#031B3A;color:#fff;border:1px solid rgba(255,255,255,.35);padding:5px 14px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap;letter-spacing:.01em;box-shadow:0 2px 10px rgba(3,10,30,.45)}
 .hero-amt{font-size:clamp(32px,10.5vw,44px);font-weight:700;letter-spacing:-.04em;line-height:1.1;margin:6px 0 12px;white-space:nowrap}
 .hero-amt.short{color:#FFD9E2}
-.hero-legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;opacity:.95}
-.hero-legend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:middle}
-.hero-legend i.d1{background:var(--yellow)}
-.hero-legend i.d2{background:#fff}
-.hero-btn{margin-top:16px;background:rgba(255,255,255,.14)!important;border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:8px 16px!important;font-size:13px;font-weight:600}
+.hero .pill{background:rgba(255,255,255,.18)!important;border:1px solid rgba(255,255,255,.26);font-weight:600}
 
 .card{background:var(--card);border:1px solid var(--line);border-radius:24px;padding:16px}
 .card h2{font-size:15.5px;font-weight:600;margin:0 0 8px;letter-spacing:-.01em}
@@ -18248,6 +18285,7 @@ main{display:flex;flex-direction:column;gap:12px}
 .items li{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);font-size:14px}
 .items li:last-child{border-bottom:0}
 .items li>button:first-child{display:flex;align-items:center;gap:11px;width:100%;flex:1;min-width:0;padding:11px 0!important}
+.items li .tog{margin-left:4px}
 .items .name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
 .items .name small{display:block;color:var(--muted);font-size:11.5px;font-weight:400;overflow:hidden;text-overflow:ellipsis}
 .items li span:last-child{font-weight:600;flex-shrink:0;white-space:nowrap}
@@ -18376,9 +18414,12 @@ label.inline input{flex:1}
 .navbar{position:fixed;bottom:calc(18px + env(safe-area-inset-bottom, 0px));left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:6px;
   background:rgba(19,24,50,.94);border:1px solid var(--line);border-radius:999px;padding:7px;z-index:10;
   box-shadow:0 16px 34px -14px rgba(0,0,0,.85);backdrop-filter:blur(14px)}
-.navbar button{width:46px;height:46px;border-radius:50%;display:grid!important;place-items:center;color:var(--muted)}
-.navbar button svg{width:21px;height:21px}
-.navbar button.on{background:#fff!important;color:#05101F}
+.navbar button{min-width:46px;height:46px;padding:0 4px!important;border-radius:23px;display:flex!important;flex-direction:column;align-items:center;justify-content:center;gap:1px;color:var(--muted);transition:background .2s ease,color .2s ease,padding .2s ease}
+.navbar button svg{width:21px;height:21px;flex-shrink:0}
+.navbar button em{font-style:normal;font-size:9.5px;font-weight:600;letter-spacing:.01em;line-height:1;animation:tabIn .2s ease-out both}
+.navbar button.on{background:#fff!important;color:#05101F;padding:0 12px!important}
+.navbar button.on svg{width:18px;height:18px}
+.navbar button svg{transition:width .2s ease,height .2s ease}
 .nav-add{background:var(--blue)!important;color:#04121F!important}
 
 .toast{position:fixed;bottom:calc(92px + env(safe-area-inset-bottom, 0px));left:50%;transform:translateX(-50%);background:#fff;color:#05101F;border-radius:16px;padding:11px 15px;display:flex;gap:16px;align-items:center;font-size:14px;font-weight:600;z-index:11;box-shadow:0 12px 26px -10px rgba(0,0,0,.7);max-width:92%}
@@ -18405,7 +18446,10 @@ label.inline input{flex:1}
 .set label,.set span{font-size:13.5px;font-weight:500}
 .set.tg{flex-direction:row;justify-content:space-between;align-items:center}
 .err{color:var(--neg)!important;font-size:13px}
-@media (prefers-reduced-motion:reduce){.tog,.tog span{transition:none}}
+@media (prefers-reduced-motion:reduce){
+  .tog,.tog span,.navbar button,.navbar button svg{transition:none}
+  .tab-view,.tab-view>*,.navbar button em{animation:none}
+}
 `;
 
 
