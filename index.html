@@ -18182,7 +18182,8 @@ const CSS = `
 .app{--bg:#030516;--card:#0B0E1E;--card2:#131832;--ink:#FFFFFF;--muted:#8C93AD;--line:rgba(255,255,255,.09);
   --blue:#0EB2FF;--yellow:#F5D04E;--pos:#3ED9A4;--neg:#FF6B8B;
   font-family:'Outfit',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;font-optical-sizing:auto;background:var(--bg);color:var(--ink);
-  min-height:100vh;max-width:460px;margin:0 auto;padding:18px 16px 118px;font-size:15px;line-height:1.5;font-variant-numeric:tabular-nums;box-sizing:border-box;
+  min-height:100vh;max-width:460px;margin:0 auto;
+  padding:calc(18px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px)) calc(118px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px));font-size:15px;line-height:1.5;font-variant-numeric:tabular-nums;box-sizing:border-box;
   overflow-x:hidden;touch-action:manipulation;-webkit-text-size-adjust:100%;text-size-adjust:100%}
 .app *{box-sizing:border-box;min-width:0;max-width:100%;touch-action:manipulation}
 .app ul,.app li{overflow-wrap:anywhere}
@@ -18372,7 +18373,7 @@ label.inline input{flex:1}
 .onboard{border:1px solid rgba(14,178,255,.4)}
 .onboard .form-row{margin-top:12px}
 
-.navbar{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:6px;
+.navbar{position:fixed;bottom:calc(18px + env(safe-area-inset-bottom, 0px));left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:6px;
   background:rgba(19,24,50,.94);border:1px solid var(--line);border-radius:999px;padding:7px;z-index:10;
   box-shadow:0 16px 34px -14px rgba(0,0,0,.85);backdrop-filter:blur(14px)}
 .navbar button{width:46px;height:46px;border-radius:50%;display:grid!important;place-items:center;color:var(--muted)}
@@ -18380,10 +18381,10 @@ label.inline input{flex:1}
 .navbar button.on{background:#fff!important;color:#05101F}
 .nav-add{background:var(--blue)!important;color:#04121F!important}
 
-.toast{position:fixed;bottom:92px;left:50%;transform:translateX(-50%);background:#fff;color:#05101F;border-radius:16px;padding:11px 15px;display:flex;gap:16px;align-items:center;font-size:14px;font-weight:600;z-index:11;box-shadow:0 12px 26px -10px rgba(0,0,0,.7);max-width:92%}
+.toast{position:fixed;bottom:calc(92px + env(safe-area-inset-bottom, 0px));left:50%;transform:translateX(-50%);background:#fff;color:#05101F;border-radius:16px;padding:11px 15px;display:flex;gap:16px;align-items:center;font-size:14px;font-weight:600;z-index:11;box-shadow:0 12px 26px -10px rgba(0,0,0,.7);max-width:92%}
 .toast button{color:#0B72B5!important;font-weight:700}
 .sheet-bg{position:fixed;inset:0;background:rgba(3,5,22,.72);display:flex;align-items:flex-end;justify-content:center;z-index:20;backdrop-filter:blur(3px)}
-.sheet{background:#0B0E1E;border:1px solid var(--line);border-bottom:0;width:100%;max-width:460px;border-radius:28px 28px 0 0;padding:18px 18px 30px;max-height:90vh;overflow:auto;overflow-x:hidden}
+.sheet{background:#0B0E1E;border:1px solid var(--line);border-bottom:0;width:100%;max-width:460px;border-radius:28px 28px 0 0;padding:18px 18px calc(30px + env(safe-area-inset-bottom, 0px));max-height:90vh;overflow:auto;overflow-x:hidden}
 .sheet-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
 .sheet h2{font-size:18px;margin:0;font-weight:600}
 .sheet h3{font-size:13.5px;margin:22px 0 4px;color:var(--muted);font-weight:600}
