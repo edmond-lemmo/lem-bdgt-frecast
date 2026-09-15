@@ -17766,6 +17766,30 @@ function Name({ children }) {
     return _jsxs(_Fragment, { children: [s.replace(QUAL, ""), " ", _jsx("span", { className: "qual", children: m[1] })] });
 }
 const clean = (s) => String(s).replace(/[^\d.]/g, "");
+async function syncPull(cfg) {
+    const url = `${cfg.url}${cfg.url.includes("?") ? "&" : "?"}token=${encodeURIComponent(cfg.token)}`;
+    const r = await fetch(url, { method: "GET" });
+    if (!r.ok)
+        throw new Error(`Drive replied ${r.status}`);
+    const data = await r.json();
+    if (data.error)
+        throw new Error(data.error);
+    return data.empty ? null : data.state;
+}
+async function syncPush(cfg, state) {
+    // text/plain keeps the browser from sending a preflight Apps Script can't answer
+    const r = await fetch(cfg.url, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ token: cfg.token, state }),
+    });
+    if (!r.ok)
+        throw new Error(`Drive replied ${r.status}`);
+    const data = await r.json();
+    if (data.error)
+        throw new Error(data.error);
+    return data;
+}
 async function saveBackupFile(state) {
     const name = `money-backup-${dnToISO(todayDn())}.txt`;
     const text = JSON.stringify(state);
@@ -17838,7 +17862,10 @@ function mergeStates(a, b) {
         byId[l.id] = l; });
     const logs = Object.values(byId).filter((l) => !del.has(l.id)).sort((x, y) => (x.d < y.d ? -1 : x.d > y.d ? 1 : (x.ts || 0) - (y.ts || 0)));
     const cfg = (a.cfgUpdated || 0) >= (b.cfgUpdated || 0) ? a : b;
-    const anchor = (a.anchor.ts || 0) >= (b.anchor.ts || 0) ? a.anchor : b.anchor;
+    // real balances always beat a phone that hasn't set any yet
+    const anchor = a.anchor.confirmed !== b.anchor.confirmed
+        ? (a.anchor.confirmed ? a.anchor : b.anchor)
+        : (a.anchor.ts || 0) >= (b.anchor.ts || 0) ? a.anchor : b.anchor;
     return { ...cfg, anchor, logs, deleted, updated: Math.max(a.updated || 0, b.updated || 0) };
 }
 /* ---------- primitives ---------- */
@@ -17915,7 +17942,7 @@ function BalanceChart({ M, buffer, compare }) {
     return (_jsxs("div", { className: "chart", children: [_jsxs("div", { className: "chart-wrap", children: [_jsxs("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `${labels[0]} over the next ${Math.round(M.H / 7)} weeks`, onPointerDown: at, onPointerMove: (e) => e.buttons && at(e), onPointerLeave: () => setHover(null), children: [_jsx("defs", { children: _jsxs("linearGradient", { id: "cg", x1: "0", x2: "0", y1: "0", y2: "1", children: [_jsx("stop", { offset: "0", stopColor: "#0EB2FF", stopOpacity: ".38" }), _jsx("stop", { offset: "1", stopColor: "#0EB2FF", stopOpacity: "0" })] }) }), yTicks.map((v) => (_jsxs("g", { children: [_jsx("line", { x1: padL, x2: W - padR, y1: y(v), y2: y(v), stroke: "rgba(255,255,255,.07)" }), _jsx("text", { x: padL - 6, y: y(v) + 3.5, textAnchor: "end", fontSize: "9", fill: "#8C93AD", children: axisMoney(v) })] }, v))), lo < 0 && _jsx("line", { x1: padL, x2: W - padR, y1: y(0), y2: y(0), stroke: "#FF6B8B", strokeOpacity: ".55" }), _jsx("line", { x1: padL, x2: W - padR, y1: y(buffer), y2: y(buffer), stroke: "rgba(255,255,255,.22)", strokeDasharray: "3 4" }), _jsx("path", { d: `${path(kA)} L${x(n - 1)},${y(lo)} L${padL},${y(lo)} Z`, fill: "url(#cg)" }), _jsx("path", { d: path(kB), fill: "none", stroke: colB, strokeWidth: "1.6", strokeLinejoin: "round", strokeDasharray: compare ? "5 4" : undefined }), _jsx("path", { d: path(kA), fill: "none", stroke: "#0EB2FF", strokeWidth: "2.2", strokeLinejoin: "round" }), xTicks.map((i) => (_jsx("text", { x: x(i), y: H - 6, textAnchor: i === 0 ? "start" : i === n - 1 ? "end" : "middle", fontSize: "9", fill: "#8C93AD", children: dl(data[i].dn) }, i))), h && (_jsxs("g", { children: [_jsx("line", { x1: x(hover), x2: x(hover), y1: padT, y2: H - padB, stroke: "rgba(255,255,255,.35)" }), _jsx("circle", { cx: x(hover), cy: y(h[kA]), r: "3.6", fill: "#0EB2FF", stroke: "#0B0E1E", strokeWidth: "1.6" }), _jsx("circle", { cx: x(hover), cy: y(h[kB]), r: "3", fill: colB, stroke: "#0B0E1E", strokeWidth: "1.4" })] }))] }), h && (_jsxs("div", { className: "tip", style: { left: `${Math.min(76, Math.max(2, ((x(hover) - padL) / (W - padL - padR)) * 100))}%` }, children: [_jsx("b", { children: dl(h.dn, { weekday: "short", day: "numeric", month: "short" }) }), _jsxs("span", { children: [labels[0], " ", money(h[kA])] }), _jsxs("span", { children: [labels[1], " ", money(h[kB])] })] }))] }), _jsxs("div", { className: "legend", children: [_jsxs("span", { children: [_jsx("i", { style: { background: "#0EB2FF" } }), labels[0]] }), _jsxs("span", { children: [_jsx("i", { style: { background: colB } }), labels[1]] }), _jsxs("span", { children: [_jsx("i", { className: "dash" }), "$", buffer, " buffer"] })] })] }));
 }
 function DayItems({ day, openOverride, openLog, onPending, empty }) {
-    const items = [...day.events.filter((e) => !(e.kind === "budget" && e.left < 0.5)), ...day.cats.filter((c) => c.left > 0.5 || c.overridden).map((c) => ({ est: true, ...c }))];
+    const items = [...day.events.filter((e) => !(e.kind === "budget" && e.left < 0.5)), ...day.cats.filter((c) => c.left > 0.5).map((c) => ({ est: true, ...c }))];
     if (!items.length)
         return _jsx("p", { className: "fine", children: empty || "Nothing due, just your usual spending." });
     return (_jsx("ul", { className: "items", children: items.map((e) => (_jsxs("li", { children: [_jsxs("button", { onClick: () => (e.kind === "log" ? openLog(e.log) : e.kind === "whatif" ? null : openOverride({
@@ -18094,16 +18121,24 @@ const daysAgo = (ts) => {
     const d = Math.floor((Date.now() - ts) / DAYMS);
     return d <= 0 ? "today" : d === 1 ? "yesterday" : `${d} days ago`;
 };
-function SettingsSheet({ st, setSettings, storageOk, onShared, onRestore, onCats, onSaved, onClose }) {
+function SettingsSheet({ st, setSettings, storageOk, onShared, onRestore, onCats, onSaved, onSync, onClose }) {
     const [backup, setBackup] = useState("");
     const [restore, setRestore] = useState("");
     const [cat, setCat] = useState("");
     const [err, setErr] = useState("");
     const [note, setNote] = useState("");
+    const [syncing, setSyncing] = useState(false);
+    const [syncMsg, setSyncMsg] = useState("");
     const fileRef = useRef(null);
     const stale = !st.lastBackup || Date.now() - st.lastBackup > 14 * DAYMS;
     const S = st.settings;
-    return (_jsxs(Sheet, { title: "Settings", onClose: onClose, children: [_jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "buf", children: "Buffer to keep in the account" }), _jsx("input", { id: "buf", inputMode: "numeric", value: S.buffer, onChange: (e) => setSettings({ buffer: +clean(e.target.value) || 0 }) })] }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "cap", children: "Treat one-off spends over this as unusual" }), _jsx("input", { id: "cap", inputMode: "numeric", value: S.cap, onChange: (e) => setSettings({ cap: +clean(e.target.value) || 0 }) })] }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "wk", children: "Learn spending from the last" }), _jsx(Seg, { label: "Lookback", small: true, value: S.weeks, onChange: (v) => setSettings({ weeks: v }), options: [[4, "4 weeks"], [8, "8 weeks"], [12, "12 weeks"]] })] }), _jsx("h3", { children: "Categories" }), _jsx("div", { className: "chips", children: st.cats.map((c) => _jsxs("button", { className: "on", onClick: () => onCats(st.cats.filter((x) => x !== c)), children: [c, " \u00D7"] }, c)) }), _jsxs("div", { className: "form-row", children: [_jsx("input", { placeholder: "Add a category", value: cat, onChange: (e) => setCat(e.target.value) }), _jsx("button", { className: "ghost", disabled: !cat.trim(), onClick: () => { onCats([...st.cats, cat.trim()]); setCat(""); }, children: "Add" })] }), _jsx("h3", { children: "Logging from two phones" }), _jsxs("div", { className: "set tg", children: [_jsx("span", { children: "Share with anyone who has this link" }), _jsx(Toggle, { label: "Shared mode", on: !!S.shared, onChange: onShared })] }), _jsx("p", { className: "fine", children: "Turn this on so both your entries land in the same place. Balances and notes are then visible to anyone who opens the link." }), _jsx("h3", { children: "Backup" }), _jsxs("p", { className: "fine", children: [storageOk ? "Entries save as you go on this device." : "Storage isn't working here, so nothing will be kept. Save a backup before you close this.", st.lastBackup ? ` Last saved to a file ${daysAgo(st.lastBackup)}.` : " You haven't saved a backup file yet."] }), stale && _jsx("p", { className: "warn-txt", children: "It's been a while. Save one now so nothing is lost if the phone is wiped." }), _jsx("button", { className: "primary wide", onClick: async () => { const how = await saveBackupFile(st); if (how !== "cancelled")
+    return (_jsxs(Sheet, { title: "Settings", onClose: onClose, children: [_jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "buf", children: "Buffer to keep in the account" }), _jsx("input", { id: "buf", inputMode: "numeric", value: S.buffer, onChange: (e) => setSettings({ buffer: +clean(e.target.value) || 0 }) })] }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "cap", children: "Treat one-off spends over this as unusual" }), _jsx("input", { id: "cap", inputMode: "numeric", value: S.cap, onChange: (e) => setSettings({ cap: +clean(e.target.value) || 0 }) })] }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "wk", children: "Learn spending from the last" }), _jsx(Seg, { label: "Lookback", small: true, value: S.weeks, onChange: (v) => setSettings({ weeks: v }), options: [[4, "4 weeks"], [8, "8 weeks"], [12, "12 weeks"]] })] }), _jsx("h3", { children: "Categories" }), _jsx("div", { className: "chips", children: st.cats.map((c) => _jsxs("button", { className: "on", onClick: () => onCats(st.cats.filter((x) => x !== c)), children: [c, " \u00D7"] }, c)) }), _jsxs("div", { className: "form-row", children: [_jsx("input", { placeholder: "Add a category", value: cat, onChange: (e) => setCat(e.target.value) }), _jsx("button", { className: "ghost", disabled: !cat.trim(), onClick: () => { onCats([...st.cats, cat.trim()]); setCat(""); }, children: "Add" })] }), _jsx("h3", { children: "Logging from two phones" }), _jsxs("div", { className: "set tg", children: [_jsx("span", { children: "Share with anyone who has this link" }), _jsx(Toggle, { label: "Shared mode", on: !!S.shared, onChange: onShared })] }), _jsx("p", { className: "fine", children: "Turn this on so both your entries land in the same place. Balances and notes are then visible to anyone who opens the link." }), _jsx("h3", { children: "Google Drive sync" }), _jsx("p", { className: "fine", children: "Keeps one file in your Drive. Sync pushes what's on this phone and pulls anything newer, so both phones stay level. Setup instructions are in SETUP-SYNC.md." }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "syncurl", children: "Web app link" }), _jsx("input", { id: "syncurl", placeholder: "https://script.google.com/\u2026/exec", value: S.syncUrl || "", onChange: (e) => setSettings({ syncUrl: e.target.value.trim() }) })] }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "synctok", children: "Token" }), _jsx("input", { id: "synctok", placeholder: "The random string from the script", value: S.syncToken || "", onChange: (e) => setSettings({ syncToken: e.target.value.trim() }) })] }), _jsx("button", { className: "primary wide", disabled: !S.syncUrl || !S.syncToken || syncing, onClick: async () => {
+                    setSyncing(true);
+                    setSyncMsg("");
+                    const r = await onSync();
+                    setSyncing(false);
+                    setSyncMsg(r);
+                }, children: syncing ? "Syncing…" : "Sync now" }), syncMsg && _jsx("p", { className: syncMsg.startsWith("Couldn't") ? "err" : "fine", children: syncMsg }), !syncMsg && st.lastSync && _jsxs("p", { className: "fine", children: ["Last synced ", daysAgo(st.lastSync), "."] }), _jsx("h3", { children: "Backup" }), _jsxs("p", { className: "fine", children: [storageOk ? "Entries save as you go on this device." : "Storage isn't working here, so nothing will be kept. Save a backup before you close this.", st.lastBackup ? ` Last saved to a file ${daysAgo(st.lastBackup)}.` : " You haven't saved a backup file yet."] }), stale && _jsx("p", { className: "warn-txt", children: "It's been a while. Save one now so nothing is lost if the phone is wiped." }), _jsx("button", { className: "primary wide", onClick: async () => { const how = await saveBackupFile(st); if (how !== "cancelled")
                     onSaved(); setNote(how === "shared" ? "Choose Save to Files to keep it." : "Saved to your downloads."); }, children: "Save backup to Files" }), _jsx("input", { ref: fileRef, type: "file", accept: ".txt,.json,text/plain,application/json", hidden: true, onChange: async (e) => {
                     const f = e.target.files?.[0];
                     if (!f)
@@ -18188,7 +18223,7 @@ function MoneyApp() {
             let s = migrate(await sGet(STORE_KEY, false));
             if (s?.settings?.shared)
                 s = mergeStates(s, migrate(await sGet(SHARED_KEY, true)));
-            const init = s || { ...SEED, anchor: { ...SEED.anchor, ts: Date.now() } };
+            const init = s || { ...SEED };
             setSt(init);
             setStorageOk(await sSet(STORE_KEY, init, false));
             loaded.current = true;
@@ -18227,6 +18262,44 @@ function MoneyApp() {
         setClosing(true);
         setTimeout(() => { setModal(null); setClosing(false); }, 160);
     }, []);
+    const runSync = useCallback(async () => {
+        const cfg = { url: st?.settings.syncUrl, token: st?.settings.syncToken };
+        if (!cfg.url || !cfg.token)
+            return "Add the link and token first.";
+        try {
+            const remote = migrate(await syncPull(cfg));
+            const merged = remote ? mergeStates(st, remote) : st;
+            const out = { ...merged, lastSync: Date.now() };
+            await syncPush(cfg, out);
+            setSt(out);
+            const pulled = remote ? out.logs.length - st.logs.length : 0;
+            return pulled > 0 ? `Synced. Pulled ${pulled} new ${pulled === 1 ? "entry" : "entries"}.` : "Synced. Everything was already up to date.";
+        }
+        catch (e) {
+            return `Couldn't reach Drive: ${e.message}`;
+        }
+    }, [st]);
+    // quiet pull when the app is opened or brought back
+    const lastPull = useRef(0);
+    useEffect(() => {
+        if (!st?.settings.syncUrl || !st?.settings.syncToken)
+            return;
+        const pull = async () => {
+            if (Date.now() - lastPull.current < 60000)
+                return;
+            lastPull.current = Date.now();
+            try {
+                const remote = migrate(await syncPull({ url: st.settings.syncUrl, token: st.settings.syncToken }));
+                if (remote && (remote.updated || 0) > (st.updated || 0))
+                    setSt((cur) => mergeStates(cur, remote));
+            }
+            catch { /* offline is fine, the local copy still works */ }
+        };
+        pull();
+        const vis = () => document.visibilityState === "visible" && pull();
+        document.addEventListener("visibilitychange", vis);
+        return () => document.removeEventListener("visibilitychange", vis);
+    }, [st?.settings.syncUrl, st?.settings.syncToken, st?.updated]);
     const M = useMemo(() => (st ? buildModel(st, SC) : null), [st, SC]);
     useEffect(() => { if (M && (sel === null || sel < M.today))
         setSel(M.today); }, [M, sel]);
@@ -18283,7 +18356,7 @@ function MoneyApp() {
     const addToPlan = (a) => saveRule({ id: uid(), name: a.name, kind: "bill", amt: a.amt, freq: "once", start: a.d, group: "Planned", active: true });
     const openLog = (init) => setModal({ type: "log", init });
     const openOverride = (o) => o.key && setModal({ type: "override", o });
-    return (_jsxs("div", { className: "app", ref: rootRef, children: [_jsx("style", { children: CSS }), _jsxs("div", { className: "scrim", "aria-hidden": "true", children: [_jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("i", {})] }), _jsxs("div", { className: "scrim bottom", "aria-hidden": "true", children: [_jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("i", {})] }), _jsxs("header", { className: "top", children: [_jsxs("div", { className: "datepill", children: [dl(M.today, { weekday: "long", day: "numeric", month: "long" }), st.settings.shared ? " · Shared" : ""] }), _jsx("button", { className: "icon", "aria-label": "Settings", onClick: () => setModal({ type: "settings" }), children: _jsxs("svg", { width: "20", height: "20", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", "aria-hidden": "true", children: [_jsx("path", { d: "M4 7h10M18 7h2M4 17h4M12 17h8" }), _jsx("circle", { cx: "16", cy: "7", r: "2" }), _jsx("circle", { cx: "10", cy: "17", r: "2" })] }) })] }), tab !== "overview" && (_jsxs("div", { className: "scorebar", children: [_jsx("span", { children: "Current balance" }), _jsx("b", { className: M.spNow < 0 ? "short" : "", children: money(M.spNow, true) })] })), !storageOk && _jsx("div", { className: "note warn", children: "Changes can't be saved in this view. Open the published app, or copy a backup from settings before closing." }), _jsxs("main", { className: "tab-view", children: [tab === "overview" && _jsx(Overview, { st: st, M: M, sel: sel, setSel: setSel, openLog: openLog, openOverride: openOverride, onPending: setPending, go: setTab, openReconcile: () => setModal({ type: "reconcile" }), confirmAnchor: setAnchor }), tab === "forecast" && _jsx(Forecast, { st: st, M: M, setSettings: setSettings, SC: SC, setSC: setSC, openLog: openLog, addToPlan: addToPlan, openOverride: openOverride }), tab === "log" && _jsx(LogTab, { st: st, M: M, openLog: openLog, openOverride: openOverride, go: setTab }), tab === "plan" && _jsx(Plan, { st: st, M: M, editRule: (r) => setModal({ type: "rule", r }), editDaily: (cat) => setModal({ type: "daily", cat }), updRule: saveRule })] }, tab), _jsxs("nav", { className: "navbar", role: "tablist", "aria-label": "Sections", children: [NAV.map(([k, label, d]) => (_jsxs("button", { role: "tab", "aria-selected": tab === k, "aria-label": label, className: tab === k ? "on" : "", onClick: () => setTab(k), children: [_jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: d }) }), tab === k && _jsx("em", { children: label })] }, k))), _jsx("button", { className: "nav-add", onClick: () => openLog(null), "aria-label": "Log a spend or transfer", children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", "aria-hidden": "true", children: _jsx("path", { d: "M12 5v14M5 12h14" }) }) })] }), toast && _jsxs("div", { className: "toast", role: "status", children: [_jsx("span", { children: toast.msg }), toast.undo && _jsx("button", { onClick: () => { toast.undo(); setToast(null); }, children: "Undo" })] }), _jsxs("div", { className: `modal-shell${closing ? " closing" : ""}`, children: [modal?.type === "log" && _jsx(LogSheet, { st: st, M: M, init: modal.init, onSave: saveLog, onSaveRule: saveRule, onDelete: deleteLog, onClose: () => shut() }), modal?.type === "rule" && _jsx(RuleSheet, { st: st, rule: modal.r, today: M.today, onSave: saveRule, onDelete: deleteRule, onClose: () => shut() }), modal?.type === "daily" && _jsx(DailySheet, { st: st, M: M, cat: modal.cat, onSave: (cat, cfg) => { up((s) => ({ ...s, daily: { ...s.daily, [cat]: cfg } }), true); shut(); }, onClose: () => shut() }), modal?.type === "override" && _jsx(OverrideSheet, { o: modal.o, onSave: saveOverride, onConfirm: confirmSpend, onClose: () => shut() }), modal?.type === "reconcile" && _jsx(ReconcileSheet, { M: M, st: st, onSave: setAnchor, onClose: () => shut() }), modal?.type === "settings" && _jsx(SettingsSheet, { st: st, setSettings: setSettings, storageOk: storageOk, onShared: onShared, onCats: (cats) => up((s) => ({ ...s, cats }), true), onSaved: () => up((s) => ({ ...s, lastBackup: Date.now() })), onRestore: (s) => { setSt({ ...migrate(s), updated: Date.now(), cfgUpdated: Date.now() }); shut(); flash("Backup restored"); }, onClose: () => shut() })] })] }));
+    return (_jsxs("div", { className: "app", ref: rootRef, children: [_jsx("style", { children: CSS }), _jsxs("div", { className: "scrim", "aria-hidden": "true", children: [_jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("i", {})] }), _jsxs("div", { className: "scrim bottom", "aria-hidden": "true", children: [_jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("i", {})] }), _jsxs("header", { className: "top", children: [_jsxs("div", { className: "datepill", children: [dl(M.today, { weekday: "long", day: "numeric", month: "long" }), st.settings.shared ? " · Shared" : ""] }), _jsx("button", { className: "icon", "aria-label": "Settings", onClick: () => setModal({ type: "settings" }), children: _jsxs("svg", { width: "20", height: "20", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", "aria-hidden": "true", children: [_jsx("path", { d: "M4 7h10M18 7h2M4 17h4M12 17h8" }), _jsx("circle", { cx: "16", cy: "7", r: "2" }), _jsx("circle", { cx: "10", cy: "17", r: "2" })] }) })] }), tab !== "overview" && (_jsxs("div", { className: "scorebar", children: [_jsx("span", { children: "Current balance" }), _jsx("b", { className: M.spNow < 0 ? "short" : "", children: money(M.spNow, true) })] })), !storageOk && _jsx("div", { className: "note warn", children: "Changes can't be saved in this view. Open the published app, or copy a backup from settings before closing." }), _jsxs("main", { className: "tab-view", children: [tab === "overview" && _jsx(Overview, { st: st, M: M, sel: sel, setSel: setSel, openLog: openLog, openOverride: openOverride, onPending: setPending, go: setTab, openReconcile: () => setModal({ type: "reconcile" }), confirmAnchor: setAnchor }), tab === "forecast" && _jsx(Forecast, { st: st, M: M, setSettings: setSettings, SC: SC, setSC: setSC, openLog: openLog, addToPlan: addToPlan, openOverride: openOverride }), tab === "log" && _jsx(LogTab, { st: st, M: M, openLog: openLog, openOverride: openOverride, go: setTab }), tab === "plan" && _jsx(Plan, { st: st, M: M, editRule: (r) => setModal({ type: "rule", r }), editDaily: (cat) => setModal({ type: "daily", cat }), updRule: saveRule })] }, tab), _jsxs("nav", { className: "navbar", role: "tablist", "aria-label": "Sections", children: [NAV.map(([k, label, d]) => (_jsxs("button", { role: "tab", "aria-selected": tab === k, "aria-label": label, className: tab === k ? "on" : "", onClick: () => setTab(k), children: [_jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: d }) }), tab === k && _jsx("em", { children: label })] }, k))), _jsx("button", { className: "nav-add", onClick: () => openLog(null), "aria-label": "Log a spend or transfer", children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", "aria-hidden": "true", children: _jsx("path", { d: "M12 5v14M5 12h14" }) }) })] }), toast && _jsxs("div", { className: "toast", role: "status", children: [_jsx("span", { children: toast.msg }), toast.undo && _jsx("button", { onClick: () => { toast.undo(); setToast(null); }, children: "Undo" })] }), _jsxs("div", { className: `modal-shell${closing ? " closing" : ""}`, children: [modal?.type === "log" && _jsx(LogSheet, { st: st, M: M, init: modal.init, onSave: saveLog, onSaveRule: saveRule, onDelete: deleteLog, onClose: () => shut() }), modal?.type === "rule" && _jsx(RuleSheet, { st: st, rule: modal.r, today: M.today, onSave: saveRule, onDelete: deleteRule, onClose: () => shut() }), modal?.type === "daily" && _jsx(DailySheet, { st: st, M: M, cat: modal.cat, onSave: (cat, cfg) => { up((s) => ({ ...s, daily: { ...s.daily, [cat]: cfg } }), true); shut(); }, onClose: () => shut() }), modal?.type === "override" && _jsx(OverrideSheet, { o: modal.o, onSave: saveOverride, onConfirm: confirmSpend, onClose: () => shut() }), modal?.type === "reconcile" && _jsx(ReconcileSheet, { M: M, st: st, onSave: setAnchor, onClose: () => shut() }), modal?.type === "settings" && _jsx(SettingsSheet, { st: st, setSettings: setSettings, storageOk: storageOk, onShared: onShared, onCats: (cats) => up((s) => ({ ...s, cats }), true), onSaved: () => up((s) => ({ ...s, lastBackup: Date.now() })), onSync: runSync, onRestore: (s) => { setSt({ ...migrate(s), updated: Date.now(), cfgUpdated: Date.now() }); shut(); flash("Backup restored"); }, onClose: () => shut() })] })] }));
 }
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap');
