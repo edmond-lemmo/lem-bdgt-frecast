@@ -17503,6 +17503,48 @@ function buildModel(state, SC = {}, todayOverride) {
             sp -= o.amt;
     }));
     const spNow = r2(sp), svNow = r2(sv);
+    // 1b. Recent days, worked backwards from the balance, so a wrong bill can be checked
+    const pastFrom = today - 45;
+    const pastDays = [];
+    {
+        const flowOn = (dn) => {
+            let f = 0;
+            logs.forEach((l) => {
+                if (isoToDn(l.d) !== dn || !afterAnchor(l, anchor, A))
+                    return;
+                f += flowOf(l)[0];
+            });
+            if (dn > A)
+                fixed.forEach((r) => occurrences(r, dn, dn, overrides).forEach((o) => {
+                    if (overrides[o.key]?.pending)
+                        return;
+                    f += r.kind === "in" ? o.amt : -o.amt;
+                }));
+            return f;
+        };
+        let bal = spNow;
+        for (let dn = today; dn > pastFrom; dn--) {
+            // balances can only be worked back as far as the last time balances were set
+            const b = dn - 1 >= A ? bal - flowOn(dn) : null;
+            pastDays.unshift({ dn: dn - 1, base: b, end: b, beforeAnchor: dn - 1 < A });
+            if (b !== null)
+                bal = b;
+        }
+        pastDays.forEach((d) => {
+            const dayLogs = logs.filter((l) => isoToDn(l.d) === d.dn);
+            d.spent = dayLogs.filter((l) => l.t === "spend").reduce((a, l) => a + l.a, 0);
+            d.events = [
+                ...fixed.flatMap((r) => occurrences(r, d.dn, d.dn, overrides).map((o) => ({
+                    ...o, name: r.name, kind: r.kind, group: r.group, past: true, delta: r.kind === "in" ? o.amt : -o.amt,
+                }))),
+                ...dayLogs.map((l) => ({ key: `log|${l.id}`, name: l.n || l.c, kind: "log", log: l, amt: l.a, delta: flowOf(l)[0], past: true })),
+            ];
+            d.bills = d.events.filter((e) => e.kind === "bill" || e.kind === "save").reduce((a, e) => a + e.amt, 0);
+            d.cats = [];
+            d.est = 0;
+            d.dow = dowOf(d.dn);
+        });
+    }
     // 2. Daily spending estimates
     const DR = dailyRates(state, today);
     const autoCats = Object.keys(state.daily).filter((c) => state.daily[c].mode !== "manual");
@@ -17732,7 +17774,7 @@ function buildModel(state, SC = {}, todayOverride) {
     const fromSavWk = (winAll.filter((l) => l.t === "fromSav").reduce((a, l) => a + l.a, 0) / DR.W) * 7;
     const savRule = rules.filter((r) => r.kind === "save").reduce((a, r) => a + (r.freq === "weekly" ? r.amt : r.freq === "fortnightly" ? r.amt / 2 : r.amt / 4.33), 0);
     return {
-        today, A, H, spNow, svNow, days, base: mB, scen: mS, nextIn, topUpNow,
+        today, A, H, spNow, svNow, days, pastDays, pastFrom: pastDays.length ? pastDays[0].dn : today, base: mB, scen: mS, nextIn, topUpNow,
         rates: DR.rates, oneOffs: DR.oneOffs, W: DR.W, months, budgetCheck, topNotes, topDescs, spendWk, oneOffWk, wk,
         todayDay, todayLogs, todaySpent, todayPlanned, todayDailyLogged, fromSavWk, savRuleWk: savRule,
         everydayWk: Object.entries(DR.rates).filter(([c]) => autoCats.includes(c)).reduce((a, [, r]) => a + r.perWeek, 0),
@@ -17950,21 +17992,24 @@ function DayItems({ day, openOverride, openLog, onPending, empty }) {
                         key: e.key, name: e.est ? e.cat : e.name, dn: day.dn, origDn: e.origDn, amt: e.est ? e.planned : e.amt, daily: !!e.est,
                         budget: e.kind === "budget", spent: e.spent, left: e.left, periodStart: e.periodStart, overridden: e.overridden,
                     })), children: [_jsx("span", { className: `dot ${e.est ? "est" : e.kind}`, "aria-hidden": "true" }), _jsxs("span", { className: "name", children: [_jsx(Name, { children: e.est ? e.cat : e.name }), _jsx("small", { children: e.est ? "Expected spending"
-                                        : e.kind === "in" ? (e.today ? (e.pending ? "Income, not in yet" : "Income, in the account") : "Income")
+                                        : e.kind === "in" ? (e.today ? (e.pending ? "Income, not in yet" : "Income, in the account") : e.past ? "Income, that day" : "Income")
                                             : e.kind === "save" ? (e.today ? "To savings, already moved" : "To savings")
                                                 : e.kind === "budget" ? `Budget, ${money(e.spent)} used`
                                                     : e.kind === "log" ? "Logged"
                                                         : e.kind === "whatif" ? "What if"
-                                                            : e.today ? "Bill, already out" : e.moved ? "Bill, moved" : "Bill" })] }), _jsxs("span", { className: e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "pos" : "", children: [e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "+" : "", money(e.est ? e.left : e.kind === "budget" ? e.left : e.amt)] })] }), e.today && e.kind === "in" && onPending && (_jsx(Toggle, { label: `${e.name} has landed in the account`, on: !e.pending, onChange: (v) => onPending(e.key, !v) }))] }, e.key))) }));
+                                                            : e.today ? "Bill, already out" : e.past ? "Bill, out that day" : e.moved ? "Bill, moved" : "Bill" })] }), _jsxs("span", { className: e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "pos" : "", children: [e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "+" : "", money(e.est ? e.left : e.kind === "budget" ? e.left : e.amt)] })] }), e.today && e.kind === "in" && onPending && (_jsx(Toggle, { label: `${e.name} has landed in the account`, on: !e.pending, onChange: (v) => onPending(e.key, !v) }))] }, e.key))) }));
 }
 /* ---------- Overview ---------- */
 function Overview({ st, M, sel, setSel, openLog, openReconcile, confirmAnchor, openOverride, onPending, go }) {
     const S = st.settings, B = M.base;
-    const day = M.days[Math.max(0, Math.min(sel - M.today, M.days.length - 1))];
+    const past = sel < M.today;
+    const day = past
+        ? M.pastDays[Math.max(0, sel - M.pastFrom)]
+        : M.days[Math.max(0, Math.min(sel - M.today, M.days.length - 1))];
     const spent = st.logs.filter((l) => l.t === "spend" && isoToDn(l.d) === day.dn).reduce((a, l) => a + l.a, 0);
     const isToday = day.dn === M.today;
     const maxWk = Math.max(...M.spendWk.map((s) => s.perWeek), 1);
-    return (_jsxs(_Fragment, { children: [!st.anchor.confirmed && _jsx(Onboard, { M: M, confirm: confirmAnchor }), _jsxs("section", { className: "hero", children: [_jsxs("div", { className: "hero-top", children: [_jsx("span", { children: "Current balance" }), _jsx("button", { className: "pill", onClick: openReconcile, children: "Update" })] }), _jsx("div", { className: "hero-amt", children: money(M.spNow, true) }), _jsxs("div", { className: "hero-split", children: [_jsxs("div", { children: [_jsx("small", { children: "Total saved" }), _jsx("b", { children: money(M.svNow) })] }), _jsxs("div", { className: "right", children: [_jsxs("small", { children: ["Available, ", Math.round(M.H / 7), " weeks"] }), _jsx("b", { className: B.available < 0 ? "short" : "", children: money(B.available) })] })] })] }), _jsxs("section", { className: "card", children: [_jsxs("div", { className: "stepper", children: [_jsx("button", { "aria-label": "Previous day", disabled: sel <= M.today, onClick: () => setSel(sel - 1), children: "\u2039" }), _jsxs("div", { children: [_jsx("b", { children: dayName(day.dn, M.today) }), _jsxs("small", { children: ["Balance ", money(day.base)] })] }), _jsx("button", { "aria-label": "Next day", disabled: sel >= M.today + M.H, onClick: () => setSel(sel + 1), children: "\u203A" })] }), _jsxs("div", { className: "day-sum", children: [_jsxs("div", { children: [_jsx("small", { children: isToday ? "Spent so far" : "Expected spending" }), _jsx("b", { children: money(isToday ? spent : day.est, isToday) })] }), _jsxs("div", { children: [_jsx("small", { children: isToday ? "Still expected" : "Bills due" }), _jsx("b", { children: money(isToday ? day.est : day.events.filter((e) => e.kind === "bill" || e.kind === "save").reduce((a, e) => a + e.amt, 0)) })] }), _jsxs("div", { children: [_jsx("small", { children: "Savings" }), _jsx("b", { children: money(day.savBase) })] })] }), _jsx(DayItems, { day: day, openOverride: openOverride, openLog: openLog, onPending: isToday ? onPending : null, empty: isToday ? "Nothing left to expect today." : undefined }), isToday && day.events.some((e) => e.kind === "in") && (_jsx("p", { className: "fine", children: "Switch the toggle off until the money actually lands. The balance above leaves it out while it's off, but the forecast still counts it today." })), sel !== M.today && _jsx("button", { className: "link", onClick: () => setSel(M.today), children: "Back to today" })] }), _jsxs("section", { className: "card bottom", children: [_jsxs("div", { className: "row-between", children: [_jsxs("div", { children: [_jsx("small", { children: "Lowest point" }), _jsx("b", { children: dl(B.lowDn, { weekday: "long", day: "numeric", month: "short" }) })] }), _jsxs("div", { className: "right", children: [_jsx("b", { className: B.lowest < 0 ? "neg" : "", children: money(B.lowest) }), _jsx("small", { children: B.payAfter ? `Before ${B.payAfter.name}` : "In the next " + Math.round(M.H / 7) + " weeks" })] })] }), _jsx(Runway, { M: M, buffer: S.buffer, selected: sel, onPick: setSel }), _jsx("p", { className: "fine", children: B.available < 0
+    return (_jsxs(_Fragment, { children: [!st.anchor.confirmed && _jsx(Onboard, { M: M, confirm: confirmAnchor }), _jsxs("section", { className: "hero", children: [_jsxs("div", { className: "hero-top", children: [_jsx("span", { children: "Current balance" }), _jsx("button", { className: "pill", onClick: openReconcile, children: "Update" })] }), _jsx("div", { className: "hero-amt", children: money(M.spNow, true) }), _jsxs("div", { className: "hero-split", children: [_jsxs("div", { children: [_jsx("small", { children: "Total saved" }), _jsx("b", { children: money(M.svNow) })] }), _jsxs("div", { className: "right", children: [_jsxs("small", { children: ["Available, ", Math.round(M.H / 7), " weeks"] }), _jsx("b", { className: B.available < 0 ? "short" : "", children: money(B.available) })] })] })] }), _jsxs("section", { className: "card", children: [_jsxs("div", { className: "stepper", children: [_jsx("button", { "aria-label": "Previous day", disabled: sel <= M.pastFrom, onClick: () => setSel(sel - 1), children: "\u2039" }), _jsxs("div", { children: [_jsx("b", { children: dayName(day.dn, M.today) }), _jsx("small", { children: day.base === null ? "Before your balances were set" : `Balance ${money(day.base)}${past ? " at end of day" : ""}` })] }), _jsx("button", { "aria-label": "Next day", disabled: sel >= M.today + M.H, onClick: () => setSel(sel + 1), children: "\u203A" })] }), _jsxs("div", { className: "day-sum", children: [_jsxs("div", { children: [_jsx("small", { children: past ? "Spent" : isToday ? "Spent so far" : "Expected spending" }), _jsx("b", { children: money(past ? day.spent : isToday ? spent : day.est, past || isToday) })] }), _jsxs("div", { children: [_jsx("small", { children: past ? "Bills out" : isToday ? "Still expected" : "Bills due" }), _jsx("b", { children: money(past ? day.bills : isToday ? day.est : day.events.filter((e) => e.kind === "bill" || e.kind === "save").reduce((a, e) => a + e.amt, 0)) })] }), _jsxs("div", { children: [_jsx("small", { children: past ? "Balance after" : "Savings" }), _jsx("b", { children: past ? (day.base === null ? "—" : money(day.base)) : money(day.savBase) })] })] }), _jsx(DayItems, { day: day, openOverride: openOverride, openLog: openLog, onPending: isToday ? onPending : null, empty: past ? "Nothing logged or due that day." : isToday ? "Nothing left to expect today." : undefined }), past && _jsx("p", { className: "fine", children: "Tap a bill to correct what actually came out, or an entry to edit it. The balance above works backwards from today." }), isToday && day.events.some((e) => e.kind === "in") && (_jsx("p", { className: "fine", children: "Switch the toggle off until the money actually lands. The balance above leaves it out while it's off, but the forecast still counts it today." })), sel !== M.today && _jsx("button", { className: "link", onClick: () => setSel(M.today), children: "Back to today" })] }), _jsxs("section", { className: "card bottom", children: [_jsxs("div", { className: "row-between", children: [_jsxs("div", { children: [_jsx("small", { children: "Lowest point" }), _jsx("b", { children: dl(B.lowDn, { weekday: "long", day: "numeric", month: "short" }) })] }), _jsxs("div", { className: "right", children: [_jsx("b", { className: B.lowest < 0 ? "neg" : "", children: money(B.lowest) }), _jsx("small", { children: B.payAfter ? `Before ${B.payAfter.name}` : "In the next " + Math.round(M.H / 7) + " weeks" })] })] }), _jsx(Runway, { M: M, buffer: S.buffer, selected: sel, onPick: setSel }), _jsx("p", { className: "fine", children: B.available < 0
                             ? `${money(-B.available)} short of your $${S.buffer} buffer, so that comes out of savings. Savings would sit around ${money(B.savRealAtLow)} then.`
                             : `You could spend ${money(B.available)} more and still keep $${S.buffer} in the account.` })] }), _jsxs("section", { className: "card", children: [_jsxs("div", { className: "row-between", children: [_jsx("h2", { children: "Where the money goes" }), _jsx("button", { className: "link", onClick: () => go("log"), children: "Log" })] }), _jsxs("p", { className: "fine", children: ["Per week, averaged over the last ", st.settings.weeks, " weeks."] }), _jsx("ul", { className: "bars", children: M.spendWk.slice(0, 6).map((s, j) => (_jsxs("li", { children: [_jsxs("div", { className: "row-between", children: [_jsx("span", { children: s.cat }), _jsx("span", { children: money(s.perWeek) })] }), _jsx(Bar, { value: s.perWeek, max: maxWk, color: CAT_COLORS[j % 6] })] }, s.cat))) }), _jsx("p", { className: "fine", children: M.oneOffWk > 1 ? `Plus about ${money(M.oneOffWk)} a week of one-offs over ${money(st.settings.cap)}, which aren't in the forecast.` : "No one-offs in that time." }), _jsx("h2", { className: "sub", children: "A typical week ahead" }), _jsxs("div", { className: "wk", children: [_jsxs("div", { children: [_jsx("small", { children: "Income" }), _jsx("b", { className: "pos", children: money(M.wk.income) })] }), _jsxs("div", { children: [_jsx("small", { children: "Bills" }), _jsx("b", { children: money(M.wk.bills) })] }), _jsxs("div", { children: [_jsx("small", { children: "Spending" }), _jsx("b", { children: money(M.wk.spending) })] }), _jsxs("div", { children: [_jsx("small", { children: "Savings" }), _jsx("b", { children: money(M.wk.saved) })] })] }), _jsx("p", { className: "fine", children: M.wk.left < 0 ? `That leaves you ${money(-M.wk.left)} short each week, which is what pulls money back out of savings.` : `That leaves about ${money(M.wk.left)} spare each week.` })] })] }));
 }
@@ -18136,7 +18181,7 @@ function SettingsSheet({ st, setSettings, storageOk, onShared, onRestore, onCats
     const fileRef = useRef(null);
     const stale = !st.lastBackup || Date.now() - st.lastBackup > 14 * DAYMS;
     const S = st.settings;
-    return (_jsxs(Sheet, { title: "Settings", onClose: onClose, children: [_jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "buf", children: "Buffer to keep in the account" }), _jsx("input", { id: "buf", inputMode: "numeric", value: S.buffer, onChange: (e) => setSettings({ buffer: +clean(e.target.value) || 0 }) })] }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "cap", children: "Treat one-off spends over this as unusual" }), _jsx("input", { id: "cap", inputMode: "numeric", value: S.cap, onChange: (e) => setSettings({ cap: +clean(e.target.value) || 0 }) })] }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "wk", children: "Learn spending from the last" }), _jsx(Seg, { label: "Lookback", small: true, value: S.weeks, onChange: (v) => setSettings({ weeks: v }), options: [[4, "4 weeks"], [8, "8 weeks"], [12, "12 weeks"]] })] }), _jsx("h3", { children: "Categories" }), _jsx("div", { className: "chips", children: st.cats.map((c) => _jsxs("button", { className: "on", onClick: () => onCats(st.cats.filter((x) => x !== c)), children: [c, " \u00D7"] }, c)) }), _jsxs("div", { className: "form-row", children: [_jsx("input", { placeholder: "Add a category", value: cat, onChange: (e) => setCat(e.target.value) }), _jsx("button", { className: "ghost", disabled: !cat.trim(), onClick: () => { onCats([...st.cats, cat.trim()]); setCat(""); }, children: "Add" })] }), _jsx("h3", { children: "Logging from two phones" }), _jsxs("div", { className: "set tg", children: [_jsx("span", { children: "Share with anyone who has this link" }), _jsx(Toggle, { label: "Shared mode", on: !!S.shared, onChange: onShared })] }), _jsx("p", { className: "fine", children: "Turn this on so both your entries land in the same place. Balances and notes are then visible to anyone who opens the link." }), _jsx("h3", { children: "Google Drive sync" }), _jsx("p", { className: "fine", children: "Keeps one file in your Drive. Sync pushes what's on this phone and pulls anything newer, so both phones stay level. Setup instructions are in SETUP-SYNC.md." }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "syncurl", children: "Web app link" }), _jsx("input", { id: "syncurl", placeholder: "https://script.google.com/\u2026/exec", value: S.syncUrl || "", onChange: (e) => setSettings({ syncUrl: e.target.value.trim() }) })] }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "synctok", children: "Token" }), _jsx("input", { id: "synctok", placeholder: "The random string from the script", value: S.syncToken || "", onChange: (e) => setSettings({ syncToken: e.target.value.trim() }) })] }), _jsx("button", { className: "primary wide", disabled: !S.syncUrl || !S.syncToken || syncing, onClick: async () => {
+    return (_jsxs(Sheet, { title: "Settings", onClose: onClose, children: [_jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "buf", children: "Buffer to keep in the account" }), _jsx("input", { id: "buf", inputMode: "numeric", value: S.buffer, onChange: (e) => setSettings({ buffer: +clean(e.target.value) || 0 }) })] }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "cap", children: "Treat one-off spends over this as unusual" }), _jsx("input", { id: "cap", inputMode: "numeric", value: S.cap, onChange: (e) => setSettings({ cap: +clean(e.target.value) || 0 }) })] }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "wk", children: "Learn spending from the last" }), _jsx(Seg, { label: "Lookback", small: true, value: S.weeks, onChange: (v) => setSettings({ weeks: v }), options: [[4, "4 weeks"], [8, "8 weeks"], [12, "12 weeks"]] })] }), _jsx("h3", { children: "Categories" }), _jsx("div", { className: "chips", children: st.cats.map((c) => _jsxs("button", { className: "on", onClick: () => onCats(st.cats.filter((x) => x !== c)), children: [c, " \u00D7"] }, c)) }), _jsxs("div", { className: "form-row", children: [_jsx("input", { placeholder: "Add a category", value: cat, onChange: (e) => setCat(e.target.value) }), _jsx("button", { className: "ghost", disabled: !cat.trim(), onClick: () => { onCats([...st.cats, cat.trim()]); setCat(""); }, children: "Add" })] }), _jsx("h3", { children: "Logging from two phones" }), _jsxs("div", { className: "set tg", children: [_jsx("span", { children: "Share with anyone who has this link" }), _jsx(Toggle, { label: "Shared mode", on: !!S.shared, onChange: onShared })] }), _jsx("p", { className: "fine", children: "Turn this on so both your entries land in the same place. Balances and notes are then visible to anyone who opens the link." }), _jsx("h3", { children: "Google Drive sync" }), _jsx("p", { className: "fine", children: "Keeps one file in your Drive. Once it's set up, anything you log or change goes up on its own a few seconds later, and the app pulls when you open it. The button below forces both right now. Setup instructions are in SETUP-SYNC.md." }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "syncurl", children: "Web app link" }), _jsx("input", { id: "syncurl", placeholder: "https://script.google.com/\u2026/exec", value: S.syncUrl || "", onChange: (e) => setSettings({ syncUrl: e.target.value.trim() }) })] }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "synctok", children: "Token" }), _jsx("input", { id: "synctok", placeholder: "The random string from the script", value: S.syncToken || "", onChange: (e) => setSettings({ syncToken: e.target.value.trim() }) })] }), _jsx("button", { className: "primary wide", disabled: !S.syncUrl || !S.syncToken || syncing, onClick: async () => {
                     setSyncing(true);
                     setSyncMsg("");
                     const r = await onSync();
@@ -18266,36 +18311,61 @@ function MoneyApp() {
         setClosing(true);
         setTimeout(() => { setModal(null); setClosing(false); }, 160);
     }, []);
+    const syncCfg = st?.settings.syncUrl && st?.settings.syncToken
+        ? { url: st.settings.syncUrl, token: st.settings.syncToken } : null;
+    const pushedAt = useRef(0); // the st.updated stamp we last got into Drive
+    const pushTimer = useRef(null);
+    const lastPull = useRef(0);
+    // push what's here, after merging in anything newer from Drive
+    const pushMerged = useCallback(async (cur) => {
+        const remote = migrate(await syncPull(syncCfg));
+        const merged = remote ? mergeStates(cur, remote) : cur;
+        const out = { ...merged, lastSync: Date.now() };
+        await syncPush(syncCfg, out);
+        pushedAt.current = Math.max(cur.updated || 0, out.updated || 0);
+        return { out, pulled: remote ? out.logs.length - cur.logs.length : 0 };
+    }, [syncCfg?.url, syncCfg?.token]);
     const runSync = useCallback(async () => {
-        const cfg = { url: st?.settings.syncUrl, token: st?.settings.syncToken };
-        if (!cfg.url || !cfg.token)
+        if (!syncCfg)
             return "Add the link and token first.";
         try {
-            const remote = migrate(await syncPull(cfg));
-            const merged = remote ? mergeStates(st, remote) : st;
-            const out = { ...merged, lastSync: Date.now() };
-            await syncPush(cfg, out);
+            const { out, pulled } = await pushMerged(st);
             setSt(out);
-            const pulled = remote ? out.logs.length - st.logs.length : 0;
             return pulled > 0 ? `Synced. Pulled ${pulled} new ${pulled === 1 ? "entry" : "entries"}.` : "Synced. Everything was already up to date.";
         }
         catch (e) {
             return `Couldn't reach Drive: ${e.message}`;
         }
-    }, [st]);
-    // quiet pull when the app is opened or brought back
-    const lastPull = useRef(0);
+    }, [st, syncCfg, pushMerged]);
+    // anything you change goes up on its own, a few seconds later
     useEffect(() => {
-        if (!st?.settings.syncUrl || !st?.settings.syncToken)
+        if (!syncCfg || !st?.updated || st.updated === pushedAt.current)
+            return;
+        clearTimeout(pushTimer.current);
+        pushTimer.current = setTimeout(async () => {
+            const stamp = st.updated;
+            try {
+                const { out } = await pushMerged(st);
+                setSt((cur) => (cur.updated === stamp ? out : cur));
+            }
+            catch { /* offline: the next change or Sync now will carry it up */ }
+        }, 8000);
+        return () => clearTimeout(pushTimer.current);
+    }, [st, syncCfg, pushMerged]);
+    // and pull when the app opens or comes back
+    useEffect(() => {
+        if (!syncCfg)
             return;
         const pull = async () => {
             if (Date.now() - lastPull.current < 60000)
                 return;
             lastPull.current = Date.now();
             try {
-                const remote = migrate(await syncPull({ url: st.settings.syncUrl, token: st.settings.syncToken }));
-                if (remote && (remote.updated || 0) > (st.updated || 0))
+                const remote = migrate(await syncPull(syncCfg));
+                if (remote && (remote.updated || 0) > (st.updated || 0)) {
                     setSt((cur) => mergeStates(cur, remote));
+                    pushedAt.current = remote.updated || 0;
+                }
             }
             catch { /* offline is fine, the local copy still works */ }
         };
@@ -18303,9 +18373,9 @@ function MoneyApp() {
         const vis = () => document.visibilityState === "visible" && pull();
         document.addEventListener("visibilitychange", vis);
         return () => document.removeEventListener("visibilitychange", vis);
-    }, [st?.settings.syncUrl, st?.settings.syncToken, st?.updated]);
+    }, [syncCfg, st?.updated]);
     const M = useMemo(() => (st ? buildModel(st, SC) : null), [st, SC]);
-    useEffect(() => { if (M && (sel === null || sel < M.today))
+    useEffect(() => { if (M && (sel === null || sel < M.pastFrom || sel > M.today + 120))
         setSel(M.today); }, [M, sel]);
     if (!st || !M || sel === null)
         return _jsxs("div", { className: "app", children: [_jsx("style", { children: CSS }), _jsx("p", { className: "fine center", children: "Loading\u2026" })] });
