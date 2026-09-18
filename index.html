@@ -18466,7 +18466,8 @@ html::-webkit-scrollbar,body::-webkit-scrollbar{width:0;height:0;display:none}
 .app::-webkit-scrollbar,.app *::-webkit-scrollbar{width:0;height:0;display:none}
 .app ul,.app li{overflow-wrap:anywhere}
 :where(.app) button{font:inherit;color:inherit;cursor:pointer;border:0;background:none;padding:0;text-align:inherit}
-.app button:focus-visible,.app input:focus-visible,.app select:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.app button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.app input:focus-visible,.app input:focus,.app select:focus-visible,.app textarea:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
 .app button:disabled{opacity:.35;cursor:default}
 
 .scrim{position:fixed;top:0;left:0;right:0;height:calc(env(safe-area-inset-top, 0px) + 26px);z-index:8;pointer-events:none}
@@ -18655,11 +18656,11 @@ main{display:flex;flex-direction:column;gap:12px}
 .form label,.form-row label,label.inline{display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:500;color:var(--muted)}
 label.inline{flex-direction:row;align-items:center;gap:10px;margin:12px 0}
 label.inline input{flex:1}
-.app input:not([type=range]),.app select,.app textarea{font:inherit;font-size:16px!important;max-width:100%;padding:12px 14px;border-radius:14px;border:1px solid var(--line);background:var(--card2);color:var(--ink);width:100%}
+.app input:not([type=range]),.app select,.app textarea{font:inherit;font-size:16px!important;width:calc(100% - 6px);max-width:calc(100% - 6px);margin-inline:3px;padding:12px 14px;border-radius:14px;border:1px solid var(--line);background:var(--card2);color:var(--ink);width:100%}
 .app input::placeholder,.app textarea::placeholder{color:#666E8A}
 .app textarea{min-height:76px;font-size:16px;margin-top:8px;resize:vertical}
 .app input[type=range]{width:100%;accent-color:var(--blue);margin:8px 0 0;background:none;border:0;padding:0}
-.app input[type=date]{color-scheme:dark;-webkit-appearance:none;appearance:none;display:block;width:100%;min-width:0;max-width:100%;text-align:left}
+.app input[type=date]{color-scheme:dark;-webkit-appearance:none;appearance:none;display:block;width:calc(100% - 6px);min-width:0;max-width:calc(100% - 6px);text-align:left}
 .app input[type=date]::-webkit-date-and-time-value{text-align:left;margin:0;min-width:0;max-width:100%}
 .app input[type=date]::-webkit-datetime-edit{padding:0;min-width:0;overflow:hidden}
 .app input[type=date]::-webkit-calendar-picker-indicator{margin:0 0 0 auto;padding:0;opacity:.55;filter:invert(1)}
@@ -18721,14 +18722,14 @@ label.inline input{flex:1}
 .chips.notes{gap:8px}
 .amt{display:flex;align-items:center;gap:6px;margin-top:16px;padding-bottom:6px}
 .amt span{font-size:clamp(24px,8vw,30px);font-weight:600;color:var(--muted);flex-shrink:0}
-.app .amt input{font-size:clamp(26px,9vw,34px)!important;font-weight:700;letter-spacing:.01em;border:0!important;background:none!important;padding:4px 0!important;border-radius:0}
+.app .amt input{font-size:clamp(26px,9vw,34px)!important;font-weight:700;letter-spacing:.01em;border:0!important;background:none!important;padding:4px 0!important;border-radius:0;width:100%;max-width:100%;margin-inline:0}
 .app .amt input:focus,.app .amt input:focus-visible{outline:none!important;box-shadow:none!important}
 
 .dow-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;margin:14px 0 4px}
 .dow-grid>div,.dow-grid label{display:flex;flex-direction:column;align-items:center;gap:4px;background:var(--card2);border-radius:14px;padding:9px 2px}
 .dow-grid small{font-size:11px;color:var(--muted);font-weight:600}
 .dow-grid b{font-size:12.5px}
-.app .dow-grid input{padding:6px 2px!important;font-size:16px!important;text-align:center;border-radius:10px}
+.app .dow-grid input{padding:6px 2px!important;font-size:16px!important;text-align:center;border-radius:10px;width:100%;max-width:100%;margin-inline:0}
 .set{display:flex;flex-direction:column;gap:7px;margin-top:16px}
 .set label,.set span{font-size:13.5px;font-weight:500}
 .set.tg{flex-direction:row;justify-content:space-between;align-items:center}
