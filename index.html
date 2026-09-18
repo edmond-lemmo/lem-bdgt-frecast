@@ -18173,9 +18173,21 @@ function ReconcileSheet({ M, st, onSave, onClose }) {
     const [sv, setSv] = useState(M.svNow.toFixed(2));
     return (_jsxs(Sheet, { title: "Update balances", onClose: onClose, children: [_jsxs("p", { className: "fine", children: ["Last set on ", dl(isoToDn(st.anchor.d), { weekday: "short", day: "numeric", month: "short" }), " to ", money(st.anchor.spending, true), " and ", money(st.anchor.savings, true), ". Everything logged since then is already counted, so only change these if the app has drifted from your bank."] }), _jsxs("div", { className: "form-row", children: [_jsxs("label", { children: ["Spending account", _jsx("input", { inputMode: "decimal", value: sp, onChange: (e) => setSp(clean(e.target.value)) })] }), _jsxs("label", { children: ["Savings", _jsx("input", { inputMode: "decimal", value: sv, onChange: (e) => setSv(clean(e.target.value)) })] })] }), _jsxs("p", { className: "fine", children: ["Difference: ", money(+sp - M.spNow, true), " spending, ", money(+sv - M.svNow, true), " savings."] }), _jsx("button", { className: "primary wide", onClick: () => onSave(+sp || 0, +sv || 0), children: "Update balances" })] }));
 }
-const daysAgo = (ts) => {
-    const d = Math.floor((Date.now() - ts) / DAYMS);
-    return d <= 0 ? "today" : d === 1 ? "yesterday" : `${d} days ago`;
+const stamp = (ts) => {
+    const d = new Date(ts);
+    const mins = Math.floor((Date.now() - ts) / 60000);
+    if (mins < 1)
+        return "just now";
+    if (mins < 60)
+        return `${mins} minute${mins === 1 ? "" : "s"} ago`;
+    const at = d.toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" }).toLowerCase();
+    const on = d.toLocaleDateString("en-AU", { day: "numeric", month: "short" });
+    const days = todayDn() - Math.round(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / DAYMS);
+    if (days <= 0)
+        return `${at} today, ${on}`;
+    if (days === 1)
+        return `${at} yesterday, ${on}`;
+    return `${at} on ${d.toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short" })}`;
 };
 function SettingsSheet({ st, setSettings, storageOk, onShared, onRestore, onCats, onSaved, onSync, onClose }) {
     const [backup, setBackup] = useState("");
@@ -18194,7 +18206,7 @@ function SettingsSheet({ st, setSettings, storageOk, onShared, onRestore, onCats
                     const r = await onSync();
                     setSyncing(false);
                     setSyncMsg(r);
-                }, children: syncing ? "Syncing…" : "Sync now" }), syncMsg && _jsx("p", { className: syncMsg.startsWith("Couldn't") ? "err" : "fine", children: syncMsg }), !syncMsg && st.lastSync && _jsxs("p", { className: "fine", children: ["Last synced ", daysAgo(st.lastSync), "."] }), _jsx("h3", { children: "Backup" }), _jsxs("p", { className: "fine", children: [storageOk ? "Entries save as you go on this device." : "Storage isn't working here, so nothing will be kept. Save a backup before you close this.", st.lastBackup ? ` Last saved to a file ${daysAgo(st.lastBackup)}.` : " You haven't saved a backup file yet."] }), stale && _jsx("p", { className: "warn-txt", children: "It's been a while. Save one now so nothing is lost if the phone is wiped." }), _jsx("button", { className: "primary wide", onClick: async () => { const how = await saveBackupFile(st); if (how !== "cancelled")
+                }, children: syncing ? "Syncing…" : "Sync now" }), syncMsg && _jsx("p", { className: syncMsg.startsWith("Couldn't") ? "err" : "fine", children: syncMsg }), st.lastSync && _jsxs("p", { className: "fine", children: ["Last synced ", stamp(st.lastSync), "."] }), _jsx("h3", { children: "Backup" }), _jsxs("p", { className: "fine", children: [storageOk ? "Entries save as you go on this device." : "Storage isn't working here, so nothing will be kept. Save a backup before you close this.", st.lastBackup ? ` Last saved to a file ${stamp(st.lastBackup)}.` : " You haven't saved a backup file yet."] }), stale && _jsx("p", { className: "warn-txt", children: "It's been a while. Save one now so nothing is lost if the phone is wiped." }), _jsx("button", { className: "primary wide", onClick: async () => { const how = await saveBackupFile(st); if (how !== "cancelled")
                     onSaved(); setNote(how === "shared" ? "Choose Save to Files to keep it." : "Saved to your downloads."); }, children: "Save backup to Files" }), _jsx("input", { ref: fileRef, type: "file", accept: ".txt,.json,text/plain,application/json", hidden: true, onChange: async (e) => {
                     const f = e.target.files?.[0];
                     if (!f)
