@@ -38,8 +38,14 @@ Do this once per phone. Nothing leaves the device.
 Your bills, budgets, balances and history appear. From then on the app saves
 as you go, on that device.
 
-Do the same on Brigid's phone if she is logging too, but note that the two
-copies do not sync with each other.
+Do the same on the second phone if someone else is logging too, but note
+that the two copies do not sync with each other.
+
+### Showing it to someone else
+
+`demo-data.txt` is a made-up household: different names, different bills,
+invented history. Restore that instead and nothing of yours is on screen. To
+get your own data back afterwards, restore `my-data-backup.txt` again.
 
 Take a fresh backup now and then with **Create backup** in the same screen, and
 keep it wherever you keep `my-data-backup.txt`. That is your only copy if the
@@ -77,8 +83,8 @@ Two consequences worth knowing:
 - **Clearing site data wipes it.** Use **Settings → Create backup** now and
   then, and keep the text somewhere safe. **Restore backup** brings it back,
   including onto a different phone.
-- **Shared mode does not sync here.** Two phones each get their own copy,
-  because a static site has no server for them to meet at.
+- **Two-phone sync** is set up via Google Drive. See `SETUP-SYNC.md`. Without
+  it, each phone keeps its own separate copy.
 
 The published `index.html` has nothing personal in it, so the public URL is
 safe to have. Your figures exist in two places only: your phone's local
