@@ -17303,7 +17303,7 @@ function installStorageShim() {
 /* Starting data: rules and history imported from Budget_2026.xlsx. After that,
    everything lives in this app. */
 const SEED = { "v": 3, "updated": 0, "cfgUpdated": 0, "anchor": { "d": "2026-09-12", "ts": 0, "spending": 0, "savings": 0, "confirmed": false }, "logs": [], "rules": [], "overrides": {}, "deleted": [], "daily": { "Everyday": { "mode": "auto" }, "Other": { "mode": "auto", "flat": true } }, "cats": ["Everyday", "Groceries", "Parking", "Petrol", "Other", "Gift", "Bills"], "settings": { "buffer": 200, "weeks": 8, "cap": 250, "horizon": 31, "shared": false } };
-const BUILD = "19 Sept 2026 22:47";
+const BUILD = "20 Sept 2026 06:28";
 const DAYMS = 86400000;
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DOW_LONG = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -17507,8 +17507,12 @@ function buildModel(state, SC = {}, todayOverride) {
         sv += b;
     });
     const fixed = rules.filter((r) => r.kind !== "budget");
+    // A bill due today has usually not hit the account yet, so it starts as
+    // pending and is switched on once it lands. Days before today have settled,
+    // and income and savings transfers default to having gone through.
+    const pendingOf = (o, kind, dn) => overrides[o.key]?.pending ?? (kind === "bill" && dn === today);
     fixed.forEach((r) => occurrences(r, A + 1, today, overrides).forEach((o) => {
-        if (overrides[o.key]?.pending)
+        if (pendingOf(o, r.kind, o.dn))
             return; // scheduled, but not in the account yet
         if (r.kind === "in")
             sp += o.amt;
@@ -17533,7 +17537,7 @@ function buildModel(state, SC = {}, todayOverride) {
             });
             if (dn > A)
                 fixed.forEach((r) => occurrences(r, dn, dn, overrides).forEach((o) => {
-                    if (overrides[o.key]?.pending)
+                    if (pendingOf(o, r.kind, dn))
                         return;
                     f += r.kind === "in" ? o.amt : -o.amt;
                 }));
@@ -17580,7 +17584,7 @@ function buildModel(state, SC = {}, todayOverride) {
     // Anything scheduled for today is already in the balance above, unless it is
     // marked as not yet received, in which case today's projection adds it back.
     fixed.forEach((r) => occurrences(r, today, today, overrides).forEach((o) => {
-        const pending = !!overrides[o.key]?.pending;
+        const pending = pendingOf(o, r.kind, today);
         addEv(today, {
             ...o, name: r.name, kind: r.kind, group: r.group, today: true, pending,
             delta: pending ? (r.kind === "in" ? o.amt : -o.amt) : 0,
@@ -18060,7 +18064,7 @@ function DayItems({ day, openOverride, openLog, onPending, empty }) {
                                                 : e.kind === "budget" ? `Budget, ${money(e.spent)} of ${money(e.alloc ?? e.spent + e.left)} Used${e.min ? ` · ${money(e.min)}+ Only` : ""}`
                                                     : e.kind === "log" ? "Logged"
                                                         : e.kind === "whatif" ? "What If"
-                                                            : e.today ? (e.pending ? "Bill, Not Out Yet" : "Bill, Already Out") : e.past ? "Bill, Out That Day" : e.moved ? "Bill, Moved" : "Bill" })] }), _jsxs("span", { className: e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "pos" : "", children: [e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "+" : "", money(e.est ? e.left : e.kind === "budget" ? e.left : e.amt)] })] }), e.today && onPending && (e.kind === "in" || e.kind === "bill" || e.kind === "save") && (_jsx(Toggle, { label: e.kind === "in" ? `${e.name} has landed in the account` : `${e.name} has come out of the account`, on: !e.pending, onChange: (v) => onPending(e.key, !v) }))] }, e.key))) }));
+                                                            : e.today ? (e.pending ? "Bill, Not Out Yet" : "Bill, Already Out") : e.past ? "Bill, Out That Day" : e.moved ? "Bill, Moved" : "Bill" })] }), _jsxs("span", { className: e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "pos" : "", children: [e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "+" : "", money(e.est ? e.left : e.kind === "budget" ? e.left : e.amt)] })] }), e.today && onPending && (e.kind === "in" || e.kind === "bill" || e.kind === "save") && (_jsx(Toggle, { label: e.kind === "in" ? `${e.name} has landed in the account` : `${e.name} has come out of the account`, on: !e.pending, onChange: (v) => onPending(e.key, !v, e.kind === "bill") }))] }, e.key))) }));
 }
 /* ---------- Overview ---------- */
 function Overview({ st, M, sel, setSel, openLog, openReconcile, confirmAnchor, openOverride, onPending, go }) {
@@ -18172,7 +18176,7 @@ function LogSheet({ st, M, init, onSave, onSaveRule, onDelete, onClose }) {
         const cat = type === "spend" ? c : type === "fromSav" ? "From savings" : type === "toSav" ? "To savings" : "From someone";
         onSave({ ...(init?.id ? init : {}), id: init?.id || uid(), t: type, c: cat, a: Math.round(amt * 100) / 100, n: n.trim(), d, ts: init?.ts || Date.now(), u: Date.now() });
     };
-    return (_jsxs(Sheet, { title: editing ? "Edit Entry" : "Log", onClose: onClose, children: [_jsx(Seg, { label: "Type", value: t, onChange: setT, options: LOG_TYPES, small: true, wrap: true }), _jsxs("div", { className: "logbody", ref: bodyRef, style: lockH ? { height: lockH } : undefined, children: [t === "moneyIn" && _jsxs(_Fragment, { children: [_jsx("p", { className: "lbl", children: "Where did it come from?" }), _jsx(Seg, { label: "Source", value: src, onChange: setSrc, options: SOURCES, small: true })] }), t === "spend" && _jsx("div", { className: "chips", role: "radiogroup", "aria-label": "Category", children: st.cats.map((x) => _jsx("button", { role: "radio", "aria-checked": c === x, className: `${c === x ? "on" : ""}${M.budgetNow[x] || M.budgetNow[String(x).trim().toLowerCase()] ? " budgeted" : ""}`, onClick: () => setC(x), children: x }, x)) }), t === "spend" && bud && (_jsxs("div", { className: `budgetnote${counts === false ? " off" : ""}`, children: [_jsxs("div", { className: "row-between", children: [_jsxs("span", { className: "name", children: [bud.name, " Budget"] }), _jsx("span", { children: money(bud.alloc, true) })] }), _jsx(BudgetBar, { spent: bud.spent, alloc: bud.alloc, pending: counts === false ? 0 : +a || 0 }), bud.ruleText && _jsx("p", { className: "fine", children: bud.ruleText }), _jsx("p", { className: "fine", children: counts === false
+    return (_jsxs(Sheet, { title: editing ? "Edit Entry" : isoToDn(d) === M.today ? "Log" : `Log, ${dl(isoToDn(d), { weekday: "short", day: "numeric", month: "short" })}`, onClose: onClose, children: [_jsx(Seg, { label: "Type", value: t, onChange: setT, options: LOG_TYPES, small: true, wrap: true }), _jsxs("div", { className: "logbody", ref: bodyRef, style: lockH ? { height: lockH } : undefined, children: [t === "moneyIn" && _jsxs(_Fragment, { children: [_jsx("p", { className: "lbl", children: "Where did it come from?" }), _jsx(Seg, { label: "Source", value: src, onChange: setSrc, options: SOURCES, small: true })] }), t === "spend" && _jsx("div", { className: "chips", role: "radiogroup", "aria-label": "Category", children: st.cats.map((x) => _jsx("button", { role: "radio", "aria-checked": c === x, className: `${c === x ? "on" : ""}${M.budgetNow[x] || M.budgetNow[String(x).trim().toLowerCase()] ? " budgeted" : ""}`, onClick: () => setC(x), children: x }, x)) }), t === "spend" && bud && (_jsxs("div", { className: `budgetnote${counts === false ? " off" : ""}`, children: [_jsxs("div", { className: "row-between", children: [_jsxs("span", { className: "name", children: [bud.name, " Budget"] }), _jsx("span", { children: money(bud.alloc, true) })] }), _jsx(BudgetBar, { spent: bud.spent, alloc: bud.alloc, pending: counts === false ? 0 : +a || 0 }), bud.ruleText && _jsx("p", { className: "fine", children: bud.ruleText }), _jsx("p", { className: "fine", children: counts === false
                                     ? _jsxs(_Fragment, { children: [_jsx("b", { children: "This one will not count." }), " It is under the ", money(bud.min, true), " minimum, so it is logged as everyday spending and the budget stays at ", money(bud.spent, true), " used."] })
                                     : +a > 0
                                         ? (bud.spent + +a > bud.alloc + 0.005
@@ -18267,17 +18271,18 @@ function ReconcileSheet({ M, st, onSave, onClose }) {
     const [sv, setSv] = useState(M.svNow.toFixed(2));
     return (_jsxs(Sheet, { title: "Update Balances", onClose: onClose, children: [_jsxs("p", { className: "fine", children: ["Last set on ", dl(isoToDn(st.anchor.d), { weekday: "short", day: "numeric", month: "short" }), " to ", money(st.anchor.spending, true), " and ", money(st.anchor.savings, true), ". Everything logged since then is already counted, so only change these if the app has drifted from your bank."] }), _jsxs("div", { className: "form-row", children: [_jsxs("label", { children: ["Spending Account", _jsx("input", { inputMode: "decimal", value: sp, onChange: (e) => setSp(clean(e.target.value)) })] }), _jsxs("label", { children: ["Savings", _jsx("input", { inputMode: "decimal", value: sv, onChange: (e) => setSv(clean(e.target.value)) })] })] }), _jsxs("p", { className: "fine", children: ["Difference: ", money(+sp - M.spNow, true), " spending, ", money(+sv - M.svNow, true), " savings."] }), _jsx("button", { className: "primary wide", onClick: () => onSave(+sp || 0, +sv || 0), children: "Update Balances" })] }));
 }
+// Reads as a chip label next to the date, so it is title case.
 const ago = (ts) => {
     const mins = Math.floor((Date.now() - ts) / 60000);
     if (mins < 1)
-        return "just now";
+        return "Just Now";
     if (mins < 60)
-        return `${mins} min ago`;
+        return `${mins} Min Ago`;
     const hrs = Math.floor(mins / 60);
     if (hrs < 24)
-        return `${hrs} ${hrs === 1 ? "hour" : "hours"} ago`;
+        return `${hrs} ${hrs === 1 ? "Hour" : "Hours"} Ago`;
     const days = Math.floor(hrs / 24);
-    return `${days} ${days === 1 ? "day" : "days"} ago`;
+    return `${days} ${days === 1 ? "Day" : "Days"} Ago`;
 };
 const syncLight = (ts) => {
     if (!ts)
@@ -18526,12 +18531,14 @@ function MoneyApp() {
     };
     const saveRule = (r) => { up((s) => ({ ...s, rules: s.rules.some((x) => x.id === r.id) ? s.rules.map((x) => (x.id === r.id ? r : x)) : [...s.rules, r] }), true); shut(); flash(`${r.name} saved`); };
     const deleteRule = (r) => { up((s) => ({ ...s, rules: s.rules.filter((x) => x.id !== r.id) }), true); shut(); flash(`${r.name} removed`, () => up((s) => ({ ...s, rules: [...s.rules, r] }), true)); };
-    const setPending = (key, pending) => up((s) => {
+    // `dflt` is what this kind of item does when untouched, so an override is
+    // only stored when the answer differs from it.
+    const setPending = (key, pending, dflt = false) => up((s) => {
         const o = { ...s.overrides };
         const rest = { ...(o[key] || {}) };
         delete rest.pending;
-        if (pending)
-            o[key] = { ...rest, pending: true };
+        if (pending !== dflt)
+            o[key] = { ...rest, pending };
         else if (Object.keys(rest).length)
             o[key] = rest;
         else
@@ -18564,6 +18571,9 @@ function MoneyApp() {
     };
     const addToPlan = (a) => saveRule({ id: uid(), name: a.name, kind: "bill", amt: a.amt, freq: "once", start: a.d, group: "Planned", active: true });
     const openLog = (init) => setModal({ type: "log", init });
+    // The day stepper on Overview sets which day a new entry is dated. Anywhere
+    // else, or on today, a new entry is dated today.
+    const logDay = tab === "overview" && sel != null && sel !== M.today ? sel : null;
     const openOverride = (o) => o.key && setModal({ type: "override", o });
     return (_jsxs("div", { className: "app", ref: rootRef, children: [_jsx("style", { children: CSS }), _jsxs("div", { className: "scrim", "aria-hidden": "true", children: [_jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("i", {})] }), _jsxs("div", { className: "scrim bottom", "aria-hidden": "true", children: [_jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("span", {}), _jsx("i", {})] }), _jsxs("header", { className: "top", children: [_jsxs("div", { className: "datepill", children: [`${dl(M.today, { weekday: "short" })} ${dl(M.today, { day: "numeric" })}-${dl(M.today, { month: "short" })}`, st.settings.shared ? " · Shared" : ""] }), _jsxs("button", { className: "synced", onClick: async () => {
                             if (!syncCfg)
@@ -18574,7 +18584,7 @@ function MoneyApp() {
                             await runSync();
                             setSyncing(false);
                         }, "aria-label": !syncCfg ? "Drive sync isn't set up. Tap to set it up."
-                            : st.lastSync ? `Last synced ${ago(st.lastSync)}. Tap to sync now.` : "Never synced. Tap to sync now.", children: [_jsx("i", { className: syncLight(st.lastSync) }), _jsx("span", { children: syncing ? "Syncing…" : !syncCfg ? "Not Set Up" : st.lastSync ? ago(st.lastSync) : "Never" })] }), _jsx("button", { className: "icon", "aria-label": "Settings", onClick: () => setModal({ type: "settings" }), children: _jsxs("svg", { width: "20", height: "20", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", "aria-hidden": "true", children: [_jsx("path", { d: "M4 7h10M18 7h2M4 17h4M12 17h8" }), _jsx("circle", { cx: "16", cy: "7", r: "2" }), _jsx("circle", { cx: "10", cy: "17", r: "2" })] }) })] }), tab !== "overview" && (_jsxs("div", { className: "scorebar", children: [_jsx("span", { children: "Current Balance" }), _jsx("b", { className: M.spNow < 0 ? "short" : "", children: money(M.spNow, true) })] })), !storageOk && _jsx("div", { className: "note warn", children: "Changes can't be saved in this view. Open the published app, or copy a backup from settings before closing." }), _jsxs("main", { className: "tab-view", children: [tab === "overview" && _jsx(Overview, { st: st, M: M, sel: sel, setSel: setSel, openLog: openLog, openOverride: openOverride, onPending: setPending, go: setTab, openReconcile: () => setModal({ type: "reconcile" }), confirmAnchor: setAnchor }), tab === "forecast" && _jsx(Forecast, { st: st, M: M, setSettings: setSettings, SC: SC, setSC: setSC, openLog: openLog, addToPlan: addToPlan, openOverride: openOverride }), tab === "log" && _jsx(LogTab, { st: st, M: M, openLog: openLog, openOverride: openOverride, go: setTab }), tab === "plan" && _jsx(Plan, { st: st, M: M, editRule: (r) => setModal({ type: "rule", r }), editDaily: (cat) => setModal({ type: "daily", cat }), updRule: saveRule })] }, tab), _jsxs("nav", { className: "navbar", role: "tablist", "aria-label": "Sections", children: [NAV.map(([k, label, d]) => (_jsxs("button", { role: "tab", "aria-selected": tab === k, "aria-label": label, className: tab === k ? "on" : "", onClick: () => setTab(k), children: [_jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: d }) }), tab === k && _jsx("em", { children: label })] }, k))), _jsx("button", { className: "nav-add", onClick: () => openLog(null), "aria-label": "Log a spend or transfer", children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", "aria-hidden": "true", children: _jsx("path", { d: "M12 5v14M5 12h14" }) }) })] }), toast && _jsxs("div", { className: "toast", role: "status", children: [_jsx("span", { children: toast.msg }), toast.undo && _jsx("button", { onClick: () => { toast.undo(); setToast(null); }, children: "Undo" })] }), _jsxs("div", { className: `modal-shell${closing ? " closing" : ""}`, children: [modal?.type === "log" && _jsx(LogSheet, { st: st, M: M, init: modal.init, onSave: saveLog, onSaveRule: saveRule, onDelete: deleteLog, onClose: () => shut() }), modal?.type === "rule" && _jsx(RuleSheet, { st: st, rule: modal.r, today: M.today, onSave: saveRule, onDelete: deleteRule, onClose: () => shut() }), modal?.type === "daily" && modal.cat === "+" && (_jsxs(Sheet, { title: "Add to Everyday Spending", onClose: () => shut(), children: [_jsx("p", { className: "fine", children: "Pick a category to forecast day by day. Anything already covered by a budget or a bill doesn't need one." }), _jsx("div", { className: "chips", children: st.cats.filter((c) => !st.daily[c]).map((c) => (_jsx("button", { onClick: () => { up((s) => ({ ...s, daily: { ...s.daily, [c]: { mode: "auto", flat: true } } }), true); setModal({ type: "daily", cat: c }); }, children: c }, c))) })] })), modal?.type === "daily" && modal.cat !== "+" && _jsx(DailySheet, { st: st, M: M, cat: modal.cat, onRemove: (cat) => { up((s) => { const d = { ...s.daily }; delete d[cat]; return { ...s, daily: d }; }, true); shut(); }, onSave: (cat, cfg) => { up((s) => ({ ...s, daily: { ...s.daily, [cat]: cfg } }), true); shut(); }, onClose: () => shut() }), modal?.type === "override" && _jsx(OverrideSheet, { o: modal.o, today: M.today, onSave: saveOverride, onConfirm: confirmSpend, onClose: () => shut() }), modal?.type === "reconcile" && _jsx(ReconcileSheet, { M: M, st: st, onSave: setAnchor, onClose: () => shut() }), modal?.type === "settings" && _jsx(SettingsSheet, { st: st, setSettings: setSettings, storageOk: storageOk, onShared: onShared, onCats: (cats) => up((s) => ({ ...s, cats }), true), onSaved: () => up((s) => ({ ...s, lastBackup: Date.now() })), onSync: runSync, onRestore: (s) => { setSt({ ...migrate(s), updated: Date.now(), cfgUpdated: Date.now() }); shut(); flash("Backup restored"); }, onClose: () => shut() })] })] }));
+                            : st.lastSync ? `Last synced ${ago(st.lastSync).toLowerCase()}. Tap to sync now.` : "Never synced. Tap to sync now.", children: [_jsx("i", { className: syncCfg ? syncLight(st.lastSync) : "red" }), _jsx("span", { children: syncing ? "Syncing…" : !syncCfg ? "Not Set Up" : st.lastSync ? ago(st.lastSync) : "Never" })] }), _jsx("button", { className: "icon", "aria-label": "Settings", onClick: () => setModal({ type: "settings" }), children: _jsxs("svg", { width: "20", height: "20", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", "aria-hidden": "true", children: [_jsx("path", { d: "M4 7h10M18 7h2M4 17h4M12 17h8" }), _jsx("circle", { cx: "16", cy: "7", r: "2" }), _jsx("circle", { cx: "10", cy: "17", r: "2" })] }) })] }), tab !== "overview" && (_jsxs("div", { className: "scorebar", children: [_jsx("span", { children: "Current Balance" }), _jsx("b", { className: M.spNow < 0 ? "short" : "", children: money(M.spNow, true) })] })), !storageOk && _jsx("div", { className: "note warn", children: "Changes can't be saved in this view. Open the published app, or copy a backup from settings before closing." }), _jsxs("main", { className: "tab-view", children: [tab === "overview" && _jsx(Overview, { st: st, M: M, sel: sel, setSel: setSel, openLog: openLog, openOverride: openOverride, onPending: setPending, go: setTab, openReconcile: () => setModal({ type: "reconcile" }), confirmAnchor: setAnchor }), tab === "forecast" && _jsx(Forecast, { st: st, M: M, setSettings: setSettings, SC: SC, setSC: setSC, openLog: openLog, addToPlan: addToPlan, openOverride: openOverride }), tab === "log" && _jsx(LogTab, { st: st, M: M, openLog: openLog, openOverride: openOverride, go: setTab }), tab === "plan" && _jsx(Plan, { st: st, M: M, editRule: (r) => setModal({ type: "rule", r }), editDaily: (cat) => setModal({ type: "daily", cat }), updRule: saveRule })] }, tab), _jsxs("nav", { className: "navbar", role: "tablist", "aria-label": "Sections", children: [NAV.map(([k, label, d]) => (_jsxs("button", { role: "tab", "aria-selected": tab === k, "aria-label": label, className: tab === k ? "on" : "", onClick: () => setTab(k), children: [_jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: d }) }), tab === k && _jsx("em", { children: label })] }, k))), _jsx("button", { className: "nav-add", onClick: () => openLog(logDay == null ? null : { d: dnToISO(logDay) }), "aria-label": "Log a spend or transfer", children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", "aria-hidden": "true", children: _jsx("path", { d: "M12 5v14M5 12h14" }) }) })] }), toast && _jsxs("div", { className: "toast", role: "status", children: [_jsx("span", { children: toast.msg }), toast.undo && _jsx("button", { onClick: () => { toast.undo(); setToast(null); }, children: "Undo" })] }), _jsxs("div", { className: `modal-shell${closing ? " closing" : ""}`, children: [modal?.type === "log" && _jsx(LogSheet, { st: st, M: M, init: modal.init, onSave: saveLog, onSaveRule: saveRule, onDelete: deleteLog, onClose: () => shut() }), modal?.type === "rule" && _jsx(RuleSheet, { st: st, rule: modal.r, today: M.today, onSave: saveRule, onDelete: deleteRule, onClose: () => shut() }), modal?.type === "daily" && modal.cat === "+" && (_jsxs(Sheet, { title: "Add to Everyday Spending", onClose: () => shut(), children: [_jsx("p", { className: "fine", children: "Pick a category to forecast day by day. Anything already covered by a budget or a bill doesn't need one." }), _jsx("div", { className: "chips", children: st.cats.filter((c) => !st.daily[c]).map((c) => (_jsx("button", { onClick: () => { up((s) => ({ ...s, daily: { ...s.daily, [c]: { mode: "auto", flat: true } } }), true); setModal({ type: "daily", cat: c }); }, children: c }, c))) })] })), modal?.type === "daily" && modal.cat !== "+" && _jsx(DailySheet, { st: st, M: M, cat: modal.cat, onRemove: (cat) => { up((s) => { const d = { ...s.daily }; delete d[cat]; return { ...s, daily: d }; }, true); shut(); }, onSave: (cat, cfg) => { up((s) => ({ ...s, daily: { ...s.daily, [cat]: cfg } }), true); shut(); }, onClose: () => shut() }), modal?.type === "override" && _jsx(OverrideSheet, { o: modal.o, today: M.today, onSave: saveOverride, onConfirm: confirmSpend, onClose: () => shut() }), modal?.type === "reconcile" && _jsx(ReconcileSheet, { M: M, st: st, onSave: setAnchor, onClose: () => shut() }), modal?.type === "settings" && _jsx(SettingsSheet, { st: st, setSettings: setSettings, storageOk: storageOk, onShared: onShared, onCats: (cats) => up((s) => ({ ...s, cats }), true), onSaved: () => up((s) => ({ ...s, lastBackup: Date.now() })), onSync: runSync, onRestore: (s) => { setSt({ ...migrate(s), updated: Date.now(), cfgUpdated: Date.now() }); shut(); flash("Backup restored"); }, onClose: () => shut() })] })] }));
 }
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap');
