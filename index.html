@@ -17302,8 +17302,8 @@ function installStorageShim() {
 
 /* Starting data: rules and history imported from Budget_2026.xlsx. After that,
    everything lives in this app. */
-const SEED = { "v": 3, "updated": 0, "cfgUpdated": 0, "anchor": { "d": "2026-09-12", "ts": 0, "spending": 0, "savings": 0, "confirmed": false }, "logs": [], "rules": [], "overrides": {}, "deleted": [], "daily": { "Everyday": { "mode": "auto" }, "Other": { "mode": "auto", "flat": true } }, "cats": ["Everyday", "Groceries", "Parking", "Petrol", "Other", "Gift", "Bills"], "settings": { "buffer": 200, "weeks": 8, "cap": 250, "horizon": 31, "shared": false } };
-const BUILD = "20 Sept 2026 06:28";
+const SEED = { "v": 3, "updated": 0, "cfgUpdated": 0, "anchor": { "d": "2026-09-12", "ts": 0, "spending": 0, "savings": 0, "confirmed": false }, "logs": [], "rules": [], "overrides": {}, "deleted": [], "daily": { "Everyday": { "mode": "auto" }, "Shopping": { "mode": "auto", "flat": true } }, "cats": ["Everyday", "Groceries", "Parking", "Petrol", "Shopping", "Gift", "Bills"], "settings": { "buffer": 200, "weeks": 8, "cap": 250, "horizon": 31, "shared": false } };
+const BUILD = "21 Sept 2026 12:12";
 const DAYMS = 86400000;
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DOW_LONG = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -17432,18 +17432,17 @@ function dailyRates(state, today) {
     const rates = {};
     const oneOffs = [];
     const winLogs = state.logs.filter((l) => l.t === "spend" && isoToDn(l.d) >= lo && isoToDn(l.d) <= hi);
+    // every one-off in the window, whatever its category (bills aside)
+    winLogs.forEach((l) => { if (!isBillLog(l) && isOneOff(l, cap))
+        oneOffs.push(l); });
     for (const [cat, cfg] of Object.entries(state.daily)) {
         const lim = cfg.max > 0 ? cfg.max : Infinity;
-        const logs = winLogs.filter((l) => l.c === cat && l.a <= lim);
+        const logs = winLogs.filter((l) => l.c === cat && l.a <= lim && !isOneOff(l, cap));
         let dow;
         if (cfg.mode === "manual")
             dow = cfg.dow.map((v) => +v || 0);
         else if (cfg.flat) {
-            let s = 0;
-            logs.forEach((l) => { if (l.a <= cap)
-                s += l.a;
-            else
-                oneOffs.push(l); });
+            const s = logs.reduce((a, l) => a + l.a, 0);
             dow = Array(7).fill(s / W);
         }
         else {
@@ -17463,7 +17462,7 @@ function dailyRates(state, today) {
             return;
         const dueDow = dowOf(isoToDn(r.start));
         const sum = [0, 0, 0, 0, 0, 0, 0];
-        winLogs.forEach((l) => { if (l.t === "spend" && sameCat(l.c, rc))
+        winLogs.forEach((l) => { if (l.t === "spend" && sameCat(l.c, rc) && !isOneOff(l, cap))
             sum[dowOf(isoToDn(l.d))] += l.a; });
         const dow = sum.map((s, k) => (k === dueDow || !cnt[k] ? 0 : s / cnt[k]));
         rates[rc] = {
@@ -17472,13 +17471,31 @@ function dailyRates(state, today) {
             derived: true, coveredDow: dueDow, budgetName: r.name,
         };
     });
-    return { rates, oneOffs: oneOffs.sort((a, b) => (a.d < b.d ? 1 : -1)), W, lo, hi, winLogs };
+    // Optionally allow for one-offs at a fraction of what they've averaged,
+    // spread evenly, since there's no telling which day the next one lands.
+    const wgt = +state.settings.oneOffWeight || 0;
+    const oneOffTotal = oneOffs.reduce((a, l) => a + l.a, 0);
+    if (wgt > 0 && oneOffTotal > 0) {
+        const per = (oneOffTotal / W) * wgt;
+        rates[ONEOFF_CAT] = { dow: Array(7).fill(per), perWeek: per * 7, actualWk: (oneOffTotal / W) * 7, hist: Array(7).fill(oneOffTotal / W),
+            mode: "auto", flat: true, max: 0, derived: true, oneOff: true, weight: wgt };
+    }
+    return { rates, oneOffs: oneOffs.sort((a, b) => (a.d < b.d ? 1 : -1)), W, lo, hi, winLogs, oneOffTotal };
 }
 // A budget points at a spend category. Older rules were saved without one, so
 // fall back to the rule's own name, and compare loosely, since a category is
 // free text the user typed.
 const catOf = (r) => r.cat || r.name || "";
+// Anything logged to Bills is a bill paid by hand, not day-to-day spending, so
+// it is kept apart from spending everywhere it is added up or listed.
+const BILLS_CAT = "Bills";
 const sameCat = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+const isBillLog = (l) => l.t === "spend" && sameCat(l.c, BILLS_CAT);
+// A one-off is left out of the habits the forecast learns, so one big purchase
+// doesn't make every future week look expensive. Your own call on an entry
+// wins; otherwise anything over the one-off limit counts as one.
+const ONEOFF_CAT = "One-Offs";
+const isOneOff = (l, cap) => l.oo === true || (l.oo !== false && l.a > cap);
 // Plain English for what a budget will and will not count.
 function budgetRuleText(r) {
     const bits = [];
@@ -17553,14 +17570,14 @@ function buildModel(state, SC = {}, todayOverride) {
         }
         pastDays.forEach((d) => {
             const dayLogs = logs.filter((l) => isoToDn(l.d) === d.dn);
-            d.spent = dayLogs.filter((l) => l.t === "spend").reduce((a, l) => a + l.a, 0);
+            d.spent = dayLogs.filter((l) => l.t === "spend" && !isBillLog(l)).reduce((a, l) => a + l.a, 0);
             d.events = [
                 ...fixed.flatMap((r) => occurrences(r, d.dn, d.dn, overrides).map((o) => ({
                     ...o, name: r.name, kind: r.kind, group: r.group, past: true, delta: r.kind === "in" ? o.amt : -o.amt,
                 }))),
                 ...dayLogs.map((l) => ({ key: `log|${l.id}`, name: l.n || l.c, kind: "log", log: l, amt: l.a, delta: flowOf(l)[0], past: true })),
             ];
-            d.bills = d.events.filter((e) => e.kind === "bill" || e.kind === "save").reduce((a, e) => a + e.amt, 0);
+            d.bills = d.events.filter((e) => e.kind === "bill" || e.kind === "save" || (e.kind === "log" && isBillLog(e.log))).reduce((a, e) => a + e.amt, 0);
             d.cats = [];
             d.est = 0;
             d.dow = dowOf(d.dn);
@@ -17576,7 +17593,10 @@ function buildModel(state, SC = {}, todayOverride) {
         const d = isoToDn(l.d);
         if (d < today)
             return;
-        loggedOn[`${l.c}|${d}`] = (loggedOn[`${l.c}|${d}`] || 0) + l.a;
+        // a one-off uses up the one-off allowance, never the day's usual spending
+        const into = isOneOff(l, settings.cap) ? (DR.rates[ONEOFF_CAT] ? ONEOFF_CAT : null) : l.c;
+        if (into)
+            loggedOn[`${into}|${d}`] = (loggedOn[`${into}|${d}`] || 0) + l.a;
     });
     // 3. Events per future day
     const ev = {};
@@ -17717,7 +17737,7 @@ function buildModel(state, SC = {}, todayOverride) {
     // Today
     const todayDay = days[0];
     const todayLogs = logs.filter((l) => isoToDn(l.d) === today).sort((a, b) => (b.ts || 0) - (a.ts || 0));
-    const todaySpent = todayLogs.filter((l) => l.t === "spend").reduce((a, l) => a + l.a, 0);
+    const todaySpent = todayLogs.filter((l) => l.t === "spend" && !isBillLog(l)).reduce((a, l) => a + l.a, 0);
     const todayPlanned = todayDay.cats.reduce((a, c) => a + c.planned, 0);
     const todayDailyLogged = todayDay.cats.reduce((a, c) => a + c.logged, 0);
     // Months
@@ -17778,7 +17798,7 @@ function buildModel(state, SC = {}, todayOverride) {
     // Where it goes (window)
     const descMap = {};
     DR.winLogs.forEach((l) => {
-        if (!state.daily[l.c] || l.a > settings.cap)
+        if (!state.daily[l.c] || isOneOff(l, settings.cap))
             return;
         const k = (l.n || l.c).trim().toLowerCase();
         const e = (descMap[k] ||= { label: (l.n || l.c).trim(), total: 0, count: 0 });
@@ -17790,7 +17810,9 @@ function buildModel(state, SC = {}, todayOverride) {
     const catTotals = {};
     let oneOffTotal = 0;
     DR.winLogs.forEach((l) => {
-        if (l.a > settings.cap) {
+        if (isBillLog(l))
+            return; // bills paid by hand aren't spending
+        if (isOneOff(l, settings.cap)) {
             oneOffTotal += l.a;
             return;
         }
@@ -17828,10 +17850,25 @@ function buildModel(state, SC = {}, todayOverride) {
     // Savings flows over the lookback window
     const winAll = logs.filter((l) => isoToDn(l.d) >= DR.lo && isoToDn(l.d) <= DR.hi);
     const fromSavWk = (winAll.filter((l) => l.t === "fromSav").reduce((a, l) => a + l.a, 0) / DR.W) * 7;
-    const savRule = rules.filter((r) => r.kind === "save").reduce((a, r) => a + (r.freq === "weekly" ? r.amt : r.freq === "fortnightly" ? r.amt / 2 : r.amt / 4.33), 0);
+    // What the live bills cost per week, whatever their schedule.
+    const perWeek = (r) => {
+        const a = +r.amt || 0;
+        if (r.freq === "weekly")
+            return a;
+        if (r.freq === "fortnightly")
+            return a / 2;
+        if (r.freq === "days")
+            return (a * 7) / Math.max(1, +r.every || 1);
+        if (r.freq === "once")
+            return 0;
+        return (a * 12) / (MONTH_STEP[r.freq] || 1) / 52;
+    };
+    const billsWk = rules.filter((r) => r.kind === "bill" && !r.retired && (!r.end || isoToDn(r.end) >= today))
+        .reduce((a, r) => a + perWeek(r), 0);
+    const savRule = rules.filter((r) => r.kind === "save" && !r.retired).reduce((a, r) => a + (r.freq === "weekly" ? r.amt : r.freq === "fortnightly" ? r.amt / 2 : r.amt / 4.33), 0);
     return {
         today, A, H, spNow, svNow, days, pastDays, pastFrom: pastDays.length ? pastDays[0].dn : today, base: mB, scen: mS, nextIn, topUpNow,
-        rates: DR.rates, oneOffs: DR.oneOffs, W: DR.W, months, budgetCheck, budgetNow, topNotes, topDescs, spendWk, oneOffWk, wk,
+        rates: DR.rates, oneOffs: DR.oneOffs, winLogs: DR.winLogs, oneOffTotal: DR.oneOffTotal, W: DR.W, months, budgetCheck, budgetNow, billsWk, topNotes, topDescs, spendWk, oneOffWk, wk,
         todayDay, todayLogs, todaySpent, todayPlanned, todayDailyLogged, fromSavWk, savRuleWk: savRule,
         everydayWk: Object.entries(DR.rates).filter(([c]) => autoCats.includes(c)).reduce((a, [, r]) => a + r.perWeek, 0),
         dailyWk: Object.values(DR.rates).reduce((a, r) => a + r.perWeek, 0),
@@ -17839,7 +17876,7 @@ function buildModel(state, SC = {}, todayOverride) {
 }
 const STORE_KEY = "bf2:state";
 const SHARED_KEY = "bf2:shared";
-const CAT_COLORS = ["#0EB2FF", "#F5D04E", "#7C6BFF", "#3ED9A4", "#FF8AC2", "#5AD1E6"];
+const CAT_COLORS = ["#0EB2FF", "#F5D04E", "#7C6BFF", "#3ED9A4", "#FF8AC2", "#5AD1E6", "#FF9F5A", "#A8E063", "#C79BFF", "#9AA3BD"];
 const LOG_TYPES = [["spend", "Spend"], ["moneyIn", "Money In"], ["toSav", "Savings"], ["afterpay", "Afterpay"]];
 const AFTERPAY_COUNT = 4;
 const SOURCES = [["fromSav", "From Savings"], ["in", "From Someone"]];
@@ -17934,11 +17971,41 @@ async function sSet(key, val, shared) {
     }
 }
 const HORIZONS = [14, 31, 62, 92];
+// Rename a spend category everywhere it is stored. If the new name already
+// exists the two merge, keeping the new name's own settings.
+function renameCat(s, from, to) {
+    const swap = (c) => (c === from ? to : c);
+    const daily = {};
+    for (const [k, v] of Object.entries(s.daily || {})) {
+        if (k === from) {
+            if (!(s.daily || {})[to])
+                daily[to] = v;
+        }
+        else
+            daily[k] = v;
+    }
+    const overrides = {};
+    for (const [k, v] of Object.entries(s.overrides || {})) {
+        overrides[k.startsWith(`daily:${from}|`) ? `daily:${to}|${k.slice(`daily:${from}|`.length)}` : k] = v;
+    }
+    return {
+        ...s,
+        cats: Array.from(new Set((s.cats || []).map(swap))),
+        logs: (s.logs || []).map((l) => (l.c === from ? { ...l, c: to } : l)),
+        rules: (s.rules || []).map((r) => (r.cat === from ? { ...r, cat: to } : r)),
+        daily, overrides,
+        lastCat: s.lastCat === from ? to : s.lastCat,
+    };
+}
 function migrate(s) {
     // every version gets a Bills category, for a bill paid by hand or at an odd amount
     if (s?.cats && !s.cats.some((c) => c.toLowerCase() === "bills")) {
         s = { ...s, cats: [...s.cats, "Bills"] };
     }
+    // "Other" is now "Shopping". Runs every load and on anything pulled from the
+    // other phone, so entries from a phone still on an older version fold in too.
+    if (s && ((s.cats || []).includes("Other") || (s.logs || []).some((l) => l.c === "Other")))
+        s = renameCat(s, "Other", "Shopping");
     if (s?.settings && !HORIZONS.includes(s.settings.horizon)) {
         s = { ...s, settings: { ...s.settings, horizon: HORIZONS.reduce((a, b) => (Math.abs(b - s.settings.horizon) < Math.abs(a - s.settings.horizon) ? b : a)) } };
     }
@@ -17955,6 +18022,42 @@ function migrate(s) {
         cats: Array.from(new Set((s.cats || []).map((c) => map[c] || c))),
         daily,
     };
+}
+// Editing a recurring item changes it from its next payment on. Payments that
+// have already happened keep their old amount and date, so an edit never
+// rewrites the balance or empties the past days. The history is kept as a
+// retired copy of the old version (hidden from Plan) that ends the day before
+// the edited version starts.
+function applyRuleEdit(s, next, today) {
+    const old = s.rules.find((r) => r.id === next.id);
+    // what the balance and the past-days view can still see
+    const from = Math.min(isoToDn(s.anchor.d) + 1, today - 50);
+    const visible = (r) => !r.retired || !r.end || isoToDn(r.end) >= from;
+    // keep each item where it was in the list
+    const place = (extra) => old
+        ? s.rules.flatMap((r) => (r.id === next.id ? [...extra, next] : visible(r) ? [r] : []))
+        : [...s.rules.filter(visible), next];
+    const plain = { ...s, rules: place([]) };
+    if (!old || old.kind === "budget" || next.kind === "budget")
+        return plain; // budgets only look forward
+    const eff = isoToDn(next.start);
+    const overrides = s.overrides || {};
+    const past = occurrences(old, from, eff - 1, overrides).filter((o) => o.origDn < eff);
+    if (!past.length)
+        return plain;
+    const pid = `${old.id}~${dnToISO(eff)}`;
+    const retired = { ...old, id: pid, end: dnToISO(eff - 1), retired: true };
+    // anything recorded against a payment before the edit moves with the history
+    const ov = {};
+    for (const [k, v] of Object.entries(overrides)) {
+        const bar = k.lastIndexOf("|");
+        const rid = k.slice(0, bar), iso = k.slice(bar + 1);
+        if (rid === old.id && /^\d{4}-\d\d-\d\d$/.test(iso) && isoToDn(iso) < eff)
+            ov[`${pid}|${iso}`] = v;
+        else
+            ov[k] = v;
+    }
+    return { ...s, overrides: ov, rules: place([retired]) };
 }
 function mergeStates(a, b) {
     if (!b)
@@ -18047,6 +18150,23 @@ function BalanceChart({ M, buffer, compare }) {
     const h = hover != null ? data[hover] : null;
     return (_jsxs("div", { className: "chart", children: [_jsxs("div", { className: "chart-wrap", children: [_jsxs("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `${labels[0]} over the next ${Math.round(M.H / 7)} weeks`, onPointerDown: at, onPointerMove: (e) => e.buttons && at(e), onPointerLeave: () => setHover(null), children: [_jsx("defs", { children: _jsxs("linearGradient", { id: "cg", x1: "0", x2: "0", y1: "0", y2: "1", children: [_jsx("stop", { offset: "0", stopColor: "#0EB2FF", stopOpacity: ".38" }), _jsx("stop", { offset: "1", stopColor: "#0EB2FF", stopOpacity: "0" })] }) }), yTicks.map((v) => (_jsxs("g", { children: [_jsx("line", { x1: padL, x2: W - padR, y1: y(v), y2: y(v), stroke: "rgba(255,255,255,.07)" }), _jsx("text", { x: padL - 6, y: y(v) + 3.5, textAnchor: "end", fontSize: "9", fill: "#8C93AD", children: axisMoney(v) })] }, v))), lo < 0 && _jsx("line", { x1: padL, x2: W - padR, y1: y(0), y2: y(0), stroke: "#FF6B8B", strokeOpacity: ".55" }), _jsx("line", { x1: padL, x2: W - padR, y1: y(buffer), y2: y(buffer), stroke: "rgba(255,255,255,.22)", strokeDasharray: "3 4" }), _jsx("path", { d: `${path(kA)} L${x(n - 1)},${y(lo)} L${padL},${y(lo)} Z`, fill: "url(#cg)" }), _jsx("path", { d: path(kB), fill: "none", stroke: colB, strokeWidth: "1.6", strokeLinejoin: "round", strokeDasharray: compare ? "5 4" : undefined }), _jsx("path", { d: path(kA), fill: "none", stroke: "#0EB2FF", strokeWidth: "2.2", strokeLinejoin: "round" }), xTicks.map((i) => (_jsx("text", { x: x(i), y: H - 6, textAnchor: i === 0 ? "start" : i === n - 1 ? "end" : "middle", fontSize: "9", fill: "#8C93AD", children: dl(data[i].dn) }, i))), h && (_jsxs("g", { children: [_jsx("line", { x1: x(hover), x2: x(hover), y1: padT, y2: H - padB, stroke: "rgba(255,255,255,.35)" }), _jsx("circle", { cx: x(hover), cy: y(h[kA]), r: "3.6", fill: "#0EB2FF", stroke: "#0B0E1E", strokeWidth: "1.6" }), _jsx("circle", { cx: x(hover), cy: y(h[kB]), r: "3", fill: colB, stroke: "#0B0E1E", strokeWidth: "1.4" })] }))] }), h && (_jsxs("div", { className: "tip", style: { left: `${Math.min(76, Math.max(2, ((x(hover) - padL) / (W - padL - padR)) * 100))}%` }, children: [_jsx("b", { children: dl(h.dn, { weekday: "short", day: "numeric", month: "short" }) }), _jsxs("span", { children: [labels[0], " ", money(h[kA])] }), _jsxs("span", { children: [labels[1], " ", money(h[kB])] })] }))] }), _jsxs("div", { className: "legend", children: [_jsxs("span", { children: [_jsx("i", { style: { background: "#0EB2FF" } }), labels[0]] }), _jsxs("span", { children: [_jsx("i", { style: { background: colB } }), labels[1]] }), _jsxs("span", { children: [_jsx("i", { className: "dash" }), "$", buffer, " Buffer"] })] })] }));
 }
+// Which group a row on a day belongs to. Bills and scheduled savings are kept
+// apart from day-to-day spending, and money coming in sits on its own.
+const DAY_GROUPS = [["bills", "Bills & Recurring"], ["money", "Income & Transfers"], ["spend", "Spending"]];
+const groupOf = (e) => {
+    if (e.est || e.kind === "budget" || e.kind === "whatif")
+        return "spend";
+    if (e.kind === "bill" || e.kind === "save")
+        return "bills";
+    if (e.kind === "in")
+        return "money";
+    if (e.kind === "log")
+        return isBillLog(e.log) ? "bills" : e.log.t === "spend" ? "spend" : "money";
+    return "spend";
+};
+const rowAmt = (e) => (e.est || e.kind === "budget" ? e.left : e.amt);
+const logLabel = (l) => (l.t === "spend" ? (isBillLog(l) ? "Bill, Logged" : `${l.c}, Logged`)
+    : l.t === "fromSav" ? "From Savings" : l.t === "toSav" ? "To Savings" : "From Someone");
 function DayItems({ day, openOverride, openLog, onPending, empty }) {
     // A used-up budget still shows, so the day says how much of it went; an
     // untouched one with nothing left is just noise.
@@ -18054,29 +18174,42 @@ function DayItems({ day, openOverride, openLog, onPending, empty }) {
         ...day.cats.filter((c) => c.left > 0.5).map((c) => ({ est: true, ...c }))];
     if (!items.length)
         return _jsx("p", { className: "fine", children: empty || "Nothing due, just your usual spending." });
-    return (_jsx("ul", { className: "items", children: items.map((e) => (_jsxs("li", { children: [_jsxs("button", { onClick: () => (e.kind === "log" ? openLog(e.log) : e.kind === "whatif" ? null : openOverride({
-                        key: e.key, name: e.est ? e.cat : e.name, dn: day.dn, origDn: e.origDn, amt: e.est ? e.planned : e.amt, daily: !!e.est,
-                        budget: e.kind === "budget", spent: e.spent, left: e.left, alloc: e.alloc, cat: e.cat, min: e.min, window: e.window,
-                        periodStart: e.periodStart, overridden: e.overridden,
-                    })), children: [_jsx("span", { className: `dot ${e.est ? "est" : e.kind}`, "aria-hidden": "true" }), _jsxs("span", { className: "name", children: [_jsx(Name, { children: e.est ? e.cat : e.name }), _jsx("small", { children: e.est ? "Expected Spending"
-                                        : e.kind === "in" ? (e.today ? (e.pending ? "Income, Not In Yet" : "Income, In the Account") : e.past ? "Income, That Day" : "Income")
-                                            : e.kind === "save" ? (e.today ? (e.pending ? "To Savings, Not Moved Yet" : "To Savings, Already Moved") : "To Savings")
-                                                : e.kind === "budget" ? `Budget, ${money(e.spent)} of ${money(e.alloc ?? e.spent + e.left)} Used${e.min ? ` · ${money(e.min)}+ Only` : ""}`
-                                                    : e.kind === "log" ? "Logged"
-                                                        : e.kind === "whatif" ? "What If"
-                                                            : e.today ? (e.pending ? "Bill, Not Out Yet" : "Bill, Already Out") : e.past ? "Bill, Out That Day" : e.moved ? "Bill, Moved" : "Bill" })] }), _jsxs("span", { className: e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "pos" : "", children: [e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "+" : "", money(e.est ? e.left : e.kind === "budget" ? e.left : e.amt)] })] }), e.today && onPending && (e.kind === "in" || e.kind === "bill" || e.kind === "save") && (_jsx(Toggle, { label: e.kind === "in" ? `${e.name} has landed in the account` : `${e.name} has come out of the account`, on: !e.pending, onChange: (v) => onPending(e.key, !v, e.kind === "bill") }))] }, e.key))) }));
+    const groups = DAY_GROUPS.map(([id, label]) => ({ id, label, list: items.filter((e) => groupOf(e) === id) })).filter((g) => g.list.length);
+    const headed = groups.length > 1;
+    const row = (e) => (_jsxs("li", { children: [_jsxs("button", { onClick: () => (e.kind === "log" ? openLog(e.log) : e.kind === "whatif" ? null : openOverride({
+                    key: e.key, name: e.est ? e.cat : e.name, dn: day.dn, origDn: e.origDn, amt: e.est ? e.planned : e.amt, daily: !!e.est,
+                    budget: e.kind === "budget", spent: e.spent, left: e.left, alloc: e.alloc, cat: e.cat, min: e.min, window: e.window,
+                    periodStart: e.periodStart, overridden: e.overridden,
+                })), children: [_jsx("span", { className: `dot ${e.est ? "est" : e.kind === "log" && isBillLog(e.log) ? "bill" : e.kind}`, "aria-hidden": "true" }), _jsxs("span", { className: "name", children: [_jsx(Name, { children: e.est ? e.cat : e.name }), _jsx("small", { children: e.est ? "Expected Spending"
+                                    : e.kind === "in" ? (e.today ? (e.pending ? "Income, Not In Yet" : "Income, In the Account") : e.past ? "Income, That Day" : "Income")
+                                        : e.kind === "save" ? (e.today ? (e.pending ? "To Savings, Not Moved Yet" : "To Savings, Already Moved") : "To Savings")
+                                            : e.kind === "budget" ? `Budget, ${money(e.spent)} of ${money(e.alloc ?? e.spent + e.left)} Used${e.min ? ` · ${money(e.min)}+ Only` : ""}`
+                                                : e.kind === "log" ? logLabel(e.log)
+                                                    : e.kind === "whatif" ? "What If"
+                                                        : e.today ? (e.pending ? "Bill, Not Out Yet" : "Bill, Already Out") : e.past ? "Bill, Out That Day" : e.moved ? "Bill, Moved" : "Bill" })] }), _jsxs("span", { className: e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "pos" : "", children: [e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "+" : "", money(rowAmt(e))] })] }), e.today && onPending && (e.kind === "in" || e.kind === "bill" || e.kind === "save") && (_jsx(Toggle, { label: e.kind === "in" ? `${e.name} has landed in the account` : `${e.name} has come out of the account`, on: !e.pending, onChange: (v) => onPending(e.key, !v, e.kind === "bill") }))] }, e.key));
+    return (_jsx("ul", { className: "items", children: groups.map((g) => [
+            headed && _jsxs("li", { className: "ghead", children: [_jsx("span", { children: g.label }), _jsx("span", { children: money(g.list.reduce((a, e) => a + rowAmt(e), 0)) })] }, `h-${g.id}`),
+            ...g.list.map(row),
+        ]) }));
 }
 /* ---------- Overview ---------- */
-function Overview({ st, M, sel, setSel, openLog, openReconcile, confirmAnchor, openOverride, onPending, go }) {
+function Overview({ st, M, sel, setSel, openLog, openReconcile, confirmAnchor, openOverride, onPending, go, openReview }) {
     const S = st.settings, B = M.base;
     const past = sel < M.today;
     const day = past
         ? M.pastDays[Math.max(0, sel - M.pastFrom)]
         : M.days[Math.max(0, Math.min(sel - M.today, M.days.length - 1))];
-    const spent = st.logs.filter((l) => l.t === "spend" && isoToDn(l.d) === day.dn).reduce((a, l) => a + l.a, 0);
+    const spent = st.logs.filter((l) => l.t === "spend" && !isBillLog(l) && isoToDn(l.d) === day.dn).reduce((a, l) => a + l.a, 0);
     const isToday = day.dn === M.today;
+    // Today's entries show on today's list too, so a spend you just logged is
+    // visible where you logged it, not only in the total.
+    const shown = isToday ? { ...day, events: [...day.events, ...M.todayLogs.map((l) => ({
+                key: `log|${l.id}`, name: l.n || l.c, kind: "log", log: l, amt: l.a, delta: flowOf(l)[0]
+            }))] } : day;
     const maxWk = Math.max(...M.spendWk.map((s) => s.perWeek), 1);
-    return (_jsxs(_Fragment, { children: [!st.anchor.confirmed && _jsx(Onboard, { M: M, confirm: confirmAnchor }), _jsxs("section", { className: "hero", children: [_jsxs("div", { className: "hero-top", children: [_jsx("span", { children: "Current Balance" }), _jsx("button", { className: "pill", onClick: openReconcile, children: "Update" })] }), _jsx("div", { className: "hero-amt", children: money(M.spNow, true) }), _jsxs("div", { className: "hero-split", children: [_jsxs("div", { children: [_jsx("small", { children: "Total Saved" }), _jsx("b", { children: money(M.svNow) })] }), _jsxs("div", { className: "right", children: [_jsxs("small", { children: ["Available, ", Math.round(M.H / 7), " Weeks"] }), _jsx("b", { className: B.available < 0 ? "short" : "", children: money(B.available) })] })] })] }), _jsxs("section", { className: "card", children: [_jsxs("div", { className: "stepper", children: [_jsx("button", { "aria-label": "Previous day", disabled: sel <= M.pastFrom, onClick: () => setSel(sel - 1), children: "\u2039" }), _jsxs("div", { children: [_jsx("b", { children: dayName(day.dn, M.today) }), _jsx("small", { children: day.base === null ? "Before your balances were set" : `Balance ${money(day.base)}${past ? " at end of day" : ""}` })] }), _jsx("button", { "aria-label": "Next day", disabled: sel >= M.today + M.H, onClick: () => setSel(sel + 1), children: "\u203A" })] }), _jsxs("div", { className: "day-sum", children: [_jsxs("div", { children: [_jsx("small", { children: past ? "Spent" : isToday ? "Spent So Far" : "Expected Spending" }), _jsx("b", { children: money(past ? day.spent : isToday ? spent : day.est, past || isToday) })] }), _jsxs("div", { children: [_jsx("small", { children: past ? "Bills Out" : isToday ? "Still Expected" : "Bills Due" }), _jsx("b", { children: money(past ? day.bills : isToday ? day.est : day.events.filter((e) => e.kind === "bill" || e.kind === "save").reduce((a, e) => a + e.amt, 0)) })] }), _jsxs("div", { children: [_jsx("small", { children: past ? "Balance After" : "Savings" }), _jsx("b", { children: past ? (day.base === null ? "—" : money(day.base)) : money(day.savBase) })] })] }), _jsx(DayItems, { day: day, openOverride: openOverride, openLog: openLog, onPending: isToday ? onPending : null, empty: past ? "Nothing logged or due that day." : isToday ? "Nothing left to expect today." : undefined }), past && _jsx("p", { className: "fine", children: "Tap a bill to correct what actually came out, or an entry to edit it. The balance above works backwards from today." }), sel !== M.today && _jsx("button", { className: "link", onClick: () => setSel(M.today), children: "Back to Today" })] }), _jsxs("section", { className: "card bottom", children: [_jsxs("div", { className: "row-between", children: [_jsxs("div", { children: [_jsx("small", { children: "Lowest Point" }), _jsx("b", { children: dl(B.lowDn, { weekday: "long", day: "numeric", month: "short" }) })] }), _jsxs("div", { className: "right", children: [_jsx("b", { className: B.lowest < 0 ? "neg" : "", children: money(B.lowest) }), _jsx("small", { children: B.payAfter ? `Before ${B.payAfter.name}` : "In the Next " + Math.round(M.H / 7) + " Weeks" })] })] }), _jsx(Runway, { M: M, buffer: S.buffer, selected: sel, onPick: setSel })] }), _jsxs("section", { className: "card", children: [_jsxs("div", { className: "row-between", children: [_jsx("h2", { children: "Where the Money Goes" }), _jsx("button", { className: "link", onClick: () => go("log"), children: "Log" })] }), _jsx("ul", { className: "bars", children: M.spendWk.slice(0, 6).map((s, j) => (_jsxs("li", { children: [_jsxs("div", { className: "row-between", children: [_jsx("span", { children: s.cat }), _jsx("span", { children: money(s.perWeek) })] }), _jsx(Bar, { value: s.perWeek, max: maxWk, color: CAT_COLORS[j % 6] })] }, s.cat))) }), _jsx("p", { className: "fine", children: M.oneOffWk > 1 ? `Plus about ${money(M.oneOffWk)} a week of one-offs over ${money(st.settings.cap)}, which aren't in the forecast.` : "No one-offs in that time." }), _jsx("h2", { className: "sub", children: "A Typical Week Ahead" }), _jsxs("div", { className: "wk", children: [_jsxs("div", { children: [_jsx("small", { children: "Income" }), _jsx("b", { className: "pos", children: money(M.wk.income) })] }), _jsxs("div", { children: [_jsx("small", { children: "Bills" }), _jsx("b", { children: money(M.wk.bills) })] }), _jsxs("div", { children: [_jsx("small", { children: "Spending" }), _jsx("b", { children: money(M.wk.spending) })] }), _jsxs("div", { children: [_jsx("small", { children: "Savings" }), _jsx("b", { children: money(M.wk.saved) })] })] })] })] }));
+    return (_jsxs(_Fragment, { children: [!st.anchor.confirmed && _jsx(Onboard, { M: M, confirm: confirmAnchor }), _jsxs("section", { className: "hero", children: [_jsxs("div", { className: "hero-top", children: [_jsx("span", { children: "Current Balance" }), _jsx("button", { className: "pill", onClick: openReconcile, children: "Update" })] }), _jsx("div", { className: "hero-amt", children: money(M.spNow, true) }), _jsxs("div", { className: "hero-split", children: [_jsxs("div", { children: [_jsx("small", { children: "Total Saved" }), _jsx("b", { children: money(M.svNow) })] }), _jsxs("div", { className: "right", children: [_jsxs("small", { children: ["Available, ", Math.round(M.H / 7), " Weeks"] }), _jsx("b", { className: B.available < 0 ? "short" : "", children: money(B.available) })] })] })] }), _jsxs("section", { className: "card", children: [_jsxs("div", { className: "stepper", children: [_jsx("button", { "aria-label": "Previous day", disabled: sel <= M.pastFrom, onClick: () => setSel(sel - 1), children: "\u2039" }), _jsxs("div", { children: [_jsx("b", { children: dayName(day.dn, M.today) }), _jsx("small", { children: day.base === null ? "Before your balances were set" : `Balance ${money(day.base)}${past ? " at end of day" : ""}` })] }), _jsx("button", { "aria-label": "Next day", disabled: sel >= M.today + M.H, onClick: () => setSel(sel + 1), children: "\u203A" })] }), _jsxs("div", { className: "day-sum", children: [_jsxs("div", { children: [_jsx("small", { children: past ? "Spent" : isToday ? "Spent So Far" : "Expected Spending" }), _jsx("b", { children: money(past ? day.spent : isToday ? spent : day.est, past || isToday) })] }), _jsxs("div", { children: [_jsx("small", { children: past ? "Bills Out" : isToday ? "Still Expected" : "Bills Due" }), _jsx("b", { children: money(past ? day.bills : isToday ? day.est : day.events.filter((e) => e.kind === "bill" || e.kind === "save").reduce((a, e) => a + e.amt, 0)) })] }), _jsxs("div", { children: [_jsx("small", { children: past ? "Balance After" : "Savings" }), _jsx("b", { children: past ? (day.base === null ? "—" : money(day.base)) : money(day.savBase) })] })] }), _jsx(DayItems, { day: shown, openOverride: openOverride, openLog: openLog, onPending: isToday ? onPending : null, empty: past ? "Nothing logged or due that day." : isToday ? "Nothing left to expect today." : undefined }), past && _jsx("p", { className: "fine", children: "Tap a bill to correct what actually came out, or an entry to edit it. The balance above works backwards from today." }), sel !== M.today && _jsx("button", { className: "link", onClick: () => setSel(M.today), children: "Back to Today" })] }), _jsxs("section", { className: "card bottom", children: [_jsxs("div", { className: "row-between", children: [_jsxs("div", { children: [_jsx("small", { children: "Lowest Point" }), _jsx("b", { children: dl(B.lowDn, { weekday: "long", day: "numeric", month: "short" }) })] }), _jsxs("div", { className: "right", children: [_jsx("b", { className: B.lowest < 0 ? "neg" : "", children: money(B.lowest) }), _jsx("small", { children: B.payAfter ? `Before ${B.payAfter.name}` : "In the Next " + Math.round(M.H / 7) + " Weeks" })] })] }), _jsx(Runway, { M: M, buffer: S.buffer, selected: sel, onPick: setSel })] }), _jsxs("section", { className: "card", children: [_jsxs("div", { className: "row-between", children: [_jsx("h2", { children: "Where the Money Goes" }), _jsx("button", { className: "link", onClick: () => go("log"), children: "Log" })] }), _jsx("ul", { className: "bars", children: M.spendWk.filter((s) => s.perWeek >= 0.5).slice(0, 10).map((s, j) => (_jsxs("li", { children: [_jsxs("div", { className: "row-between", children: [_jsx("span", { children: s.cat }), _jsx("span", { children: money(s.perWeek) })] }), _jsx(Bar, { value: s.perWeek, max: maxWk, color: CAT_COLORS[j % CAT_COLORS.length] })] }, s.cat))) }), _jsx("p", { className: "fine", children: M.oneOffWk > 1
+                            ? `Plus about ${money(M.oneOffWk)} a week of one-offs, ${!+S.oneOffWeight ? "which are left out of the forecast" : +S.oneOffWeight < 1 ? "counted at half in the forecast" : "counted in full in the forecast"}. Bills are kept separate.`
+                            : "No one-offs in that time. Bills are kept separate." }), _jsx("button", { className: "ghost wide", onClick: openReview, children: "Review Regular and One-Off Spending" }), _jsx("h2", { className: "sub", children: "A Typical Week Ahead" }), _jsxs("div", { className: "wk", children: [_jsxs("div", { children: [_jsx("small", { children: "Income" }), _jsx("b", { className: "pos", children: money(M.wk.income) })] }), _jsxs("div", { children: [_jsx("small", { children: "Bills" }), _jsx("b", { children: money(M.wk.bills) })] }), _jsxs("div", { children: [_jsx("small", { children: "Spending" }), _jsx("b", { children: money(M.wk.spending) })] }), _jsxs("div", { children: [_jsx("small", { children: "Savings" }), _jsx("b", { children: money(M.wk.saved) })] })] })] })] }));
 }
 function Onboard({ M, confirm }) {
     const [sp, setSp] = useState(M.spNow.toFixed(2));
@@ -18106,7 +18239,7 @@ function Forecast({ st, M, setSettings, SC, setSC, openOverride, openLog, addToP
             })] }));
 }
 /* ---------- Log ---------- */
-function LogTab({ st, M, openLog, openOverride, go }) {
+function LogTab({ st, M, openLog, openOverride, go, openReview }) {
     const [limit, setLimit] = useState(40);
     const [view, setView] = useState("upcoming");
     const upcoming = [];
@@ -18115,16 +18248,32 @@ function LogTab({ st, M, openLog, openOverride, go }) {
             if (e.kind !== "log" && !(e.kind === "budget" && e.left < 1))
                 upcoming.push({ ...e, dn: d.dn });
     const logs = sortLogs(st.logs).slice(0, limit);
-    const byDay = [];
-    logs.forEach((l) => { const d = isoToDn(l.d); if (!byDay.length || byDay[byDay.length - 1].d !== d)
-        byDay.push({ d, list: [] }); byDay[byDay.length - 1].list.push(l); });
+    // Each day lists what you logged, plus the bills and pay from Plan that went
+    // through that day, grouped so bills never mix in with spending.
+    const oldest = logs.length ? isoToDn(logs[logs.length - 1].d) : M.today;
+    const dayMap = new Map();
+    const put = (dn, e) => { if (!dayMap.has(dn))
+        dayMap.set(dn, []); dayMap.get(dn).push(e); };
+    logs.forEach((l) => put(isoToDn(l.d), { key: `log|${l.id}`, name: l.n || l.c, kind: "log", log: l, amt: l.a, delta: flowOf(l)[0] }));
+    [...M.pastDays, M.todayDay].forEach((d) => {
+        if (!d || d.dn < oldest || d.dn > M.today)
+            return;
+        d.events.forEach((e) => { if ((e.kind === "bill" || e.kind === "save" || e.kind === "in") && !e.pending)
+            put(d.dn, e); });
+    });
+    const byDay = [...dayMap.entries()].sort((a, b) => b[0] - a[0]).map(([d, list]) => ({ d, list }));
     const upByDay = [];
     upcoming.forEach((e) => { if (!upByDay.length || upByDay[upByDay.length - 1].d !== e.dn)
         upByDay.push({ d: e.dn, list: [] }); upByDay[upByDay.length - 1].list.push(e); });
     return (_jsxs(_Fragment, { children: [_jsx(Seg, { label: "View", value: view, onChange: setView, options: [["upcoming", "Upcoming"], ["recent", "Recent"]] }), view === "upcoming" ? (_jsxs("section", { className: "card", children: [_jsxs("p", { className: "fine", children: ["Everything due in the next ", Math.round(M.H / 7), " weeks. Tap an item to change or skip it for that date."] }), upByDay.map((g) => (_jsxs("div", { className: "group", children: [_jsxs("div", { className: "row-between group-head", children: [_jsx("span", { children: dayName(g.d, M.today) }), _jsx("span", { children: money(g.list.reduce((a, e) => a + (e.kind === "in" ? 0 : e.kind === "budget" ? e.left : e.amt), 0)) })] }), _jsx("ul", { className: "items", children: g.list.map((e) => (_jsx("li", { children: _jsxs("button", { onClick: () => openOverride({ key: e.key, name: e.name, dn: g.d, origDn: e.origDn, amt: e.amt, overridden: e.overridden,
-                                            budget: e.kind === "budget", spent: e.spent, left: e.left, alloc: e.alloc, cat: e.cat, min: e.min, window: e.window, periodStart: e.periodStart }), children: [_jsx("span", { className: `dot ${e.kind}`, "aria-hidden": "true" }), _jsxs("span", { className: "name", children: [_jsx(Name, { children: e.name }), _jsx("small", { children: e.kind === "in" ? "Income" : e.kind === "save" ? "To Savings" : e.kind === "budget" ? "Budget" : e.moved ? "Bill, Moved" : "Bill" })] }), _jsxs("span", { className: e.kind === "in" ? "pos" : "", children: [e.kind === "in" ? "+" : "", money(e.kind === "budget" ? e.left : e.amt)] })] }) }, e.key))) })] }, g.d))), _jsx("button", { className: "link", onClick: () => go("plan"), children: "Change a Regular Amount in Plan" })] })) : (_jsxs("section", { className: "card", children: [byDay.length === 0 && _jsx("p", { className: "fine", children: "Nothing logged yet. Tap Log to add your first entry." }), byDay.map((g) => {
-                        const sp = g.list.filter((l) => l.t === "spend").reduce((a, l) => a + l.a, 0);
-                        return (_jsxs("div", { className: "group", children: [_jsxs("div", { className: "row-between group-head", children: [_jsx("span", { children: dayName(g.d, M.today) }), _jsx("span", { children: money(sp, true) })] }), _jsx("ul", { className: "items", children: g.list.map((l) => (_jsx("li", { children: _jsxs("button", { onClick: () => openLog(l), children: [_jsx("span", { className: `dot ${l.t === "spend" ? "bill" : l.t === "toSav" ? "save" : "in"}`, "aria-hidden": "true" }), _jsxs("span", { className: "name", children: [_jsx(Name, { children: l.n || l.c }), _jsx("small", { children: l.t === "spend" ? l.c : l.t === "fromSav" ? "From Savings" : l.t === "toSav" ? "To Savings" : "From Someone" })] }), _jsxs("span", { className: l.t === "spend" || l.t === "toSav" ? "" : "pos", children: [l.t === "spend" || l.t === "toSav" ? "" : "+", money(l.a, true)] })] }) }, l.id))) })] }, g.d));
+                                            budget: e.kind === "budget", spent: e.spent, left: e.left, alloc: e.alloc, cat: e.cat, min: e.min, window: e.window, periodStart: e.periodStart }), children: [_jsx("span", { className: `dot ${e.kind}`, "aria-hidden": "true" }), _jsxs("span", { className: "name", children: [_jsx(Name, { children: e.name }), _jsx("small", { children: e.kind === "in" ? "Income" : e.kind === "save" ? "To Savings" : e.kind === "budget" ? "Budget" : e.moved ? "Bill, Moved" : "Bill" })] }), _jsxs("span", { className: e.kind === "in" ? "pos" : "", children: [e.kind === "in" ? "+" : "", money(e.kind === "budget" ? e.left : e.amt)] })] }) }, e.key))) })] }, g.d))), _jsx("button", { className: "link", onClick: () => go("plan"), children: "Change a Regular Amount in Plan" })] })) : (_jsxs("section", { className: "card", children: [byDay.length === 0 && _jsx("p", { className: "fine", children: "Nothing logged yet. Tap Log to add your first entry." }), byDay.length > 0 && _jsx("button", { className: "link", onClick: openReview, children: "Review Regular and One-Off Spending" }), byDay.map((g) => {
+                        const sp = g.list.filter((e) => groupOf(e) === "spend").reduce((a, e) => a + e.amt, 0);
+                        const groups = DAY_GROUPS.map(([id, label]) => ({ id, label, list: g.list.filter((e) => groupOf(e) === id) })).filter((x) => x.list.length);
+                        return (_jsxs("div", { className: "group", children: [_jsxs("div", { className: "row-between group-head", children: [_jsx("span", { children: dayName(g.d, M.today) }), _jsx("span", { children: money(sp, true) })] }), _jsx("ul", { className: "items", children: groups.map((x) => [
+                                        _jsxs("li", { className: "ghead", children: [_jsx("span", { children: x.label }), _jsx("span", { children: money(x.list.reduce((a, e) => a + e.amt, 0), true) })] }, `h-${x.id}`),
+                                        ...x.list.map((e) => (_jsx("li", { children: _jsxs("button", { onClick: () => (e.kind === "log" ? openLog(e.log) : openOverride({ key: e.key, name: e.name, dn: g.d, origDn: e.origDn, amt: e.amt, overridden: e.overridden })), children: [_jsx("span", { className: `dot ${e.kind === "log" ? (isBillLog(e.log) ? "bill" : e.log.t === "spend" ? "est" : e.log.t === "toSav" ? "save" : "in") : e.kind}`, "aria-hidden": "true" }), _jsxs("span", { className: "name", children: [_jsx(Name, { children: e.name }), _jsx("small", { children: e.kind === "log" ? (e.log.t === "spend" && !isBillLog(e.log) ? e.log.c : logLabel(e.log))
+                                                                    : e.kind === "in" ? "Income, From Plan" : e.kind === "save" ? "To Savings, From Plan" : "Bill, From Plan" })] }), _jsxs("span", { className: e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "pos" : "", children: [e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "+" : "", money(e.amt, true)] })] }) }, e.key))),
+                                    ]) })] }, g.d));
                     }), st.logs.length > limit && _jsx("button", { className: "ghost wide", onClick: () => setLimit(limit + 60), children: "Show More" })] }))] }));
 }
 /* ---------- Plan ---------- */
@@ -18133,12 +18282,75 @@ function Plan({ st, M, editRule, editDaily, updRule }) {
     const next = (r) => occurrences(r, M.today, M.today + 800, st.overrides)[0];
     const rows = (list) => list.filter(futureOnce).map((r) => ({ r, n: next(r) })).sort((a, b) => (a.n?.dn ?? 1e9) - (b.n?.dn ?? 1e9));
     const groups = {};
-    st.rules.filter((r) => r.kind === "bill").forEach((r) => (groups[r.group || "Other Bills"] ||= []).push(r));
+    st.rules.filter((r) => r.kind === "bill" && !r.retired).forEach((r) => (groups[r.group || "Other Bills"] ||= []).push(r));
     const Row = ({ r, n }) => (_jsx("li", { children: _jsxs("button", { onClick: () => editRule(r), children: [_jsxs("span", { className: "name", children: [_jsx(Name, { children: r.name }), _jsxs("small", { children: [describeRule(r), n ? ` · Next ${dl(n.dn, { weekday: "short", day: "numeric", month: "short" })}` : " · Nothing upcoming"] })] }), _jsx("span", { className: r.kind === "in" ? "pos" : "", children: money(r.amt, r.amt % 1 !== 0) })] }) }));
     const Section = ({ title, list, kind, sub }) => (_jsxs("section", { className: "card", children: [_jsxs("div", { className: "row-between", children: [_jsx("h2", { children: title }), _jsx("button", { className: "link", onClick: () => editRule({ kind, group: title }), children: "Add" })] }), sub && _jsx("p", { className: "fine", children: sub }), _jsx("ul", { className: "items plan", children: rows(list).map((x) => _jsx(Row, { ...x }, x.r.id)) })] }));
-    return (_jsxs(_Fragment, { children: [_jsx("p", { className: "intro", children: "This replaces the formulas in the sheet. Everything here feeds the forecast." }), _jsx(Section, { title: "Income", list: st.rules.filter((r) => r.kind === "in"), kind: "in", sub: "Set monthly pay to move off weekends in the item itself." }), _jsx(Section, { title: "Savings", list: st.rules.filter((r) => r.kind === "save"), kind: "save", sub: "Moved out of the spending account on each date." }), _jsxs("section", { className: "card", children: [_jsxs("div", { className: "row-between", children: [_jsx("h2", { children: "Budgets" }), _jsx("button", { className: "link", onClick: () => editRule({ kind: "budget", group: "Budgets" }), children: "Add" })] }), _jsx("p", { className: "fine", children: "What you log in the category uses these up." }), _jsx("ul", { className: "items plan", children: M.budgetCheck.map(({ rule: r, actualPer }) => (_jsxs("li", { children: [_jsxs("button", { onClick: () => editRule(r), children: [_jsxs("span", { className: "name", children: [_jsx(Name, { children: r.name }), _jsxs("small", { children: [describeRule(r), " \u00B7 You Average ", money(actualPer)] }), M.budgetNow[catOf(r)] && _jsx(BudgetBar, { spent: M.budgetNow[catOf(r)].spent, alloc: M.budgetNow[catOf(r)].alloc })] }), _jsx("span", { children: money(r.amt) })] }), actualPer > r.amt * 1.1 && _jsxs("button", { className: "mini", onClick: () => updRule({ ...r, amt: Math.round(actualPer) }), children: ["Use ", money(actualPer)] })] }, r.id))) })] }), _jsxs("section", { className: "card", children: [_jsxs("div", { className: "row-between", children: [_jsx("h2", { children: "Everyday Spending" }), st.cats.some((c) => !st.daily[c]) && _jsx("button", { className: "link", onClick: () => editDaily("+"), children: "Add" })] }), _jsxs("p", { className: "fine", children: ["What the forecast expects each day. Auto learns from the last ", st.settings.weeks, " weeks; set your own for things like parking."] }), _jsx("ul", { className: "items plan", children: Object.entries(st.daily).map(([cat, cfg]) => (_jsx("li", { children: _jsxs("button", { onClick: () => editDaily(cat), children: [_jsxs("span", { className: "name", children: [_jsx(Name, { children: cat }), _jsx("small", { children: cfg.mode === "manual" ? "Amounts You Set" : cfg.flat ? "Auto, Spread Evenly" : "Auto, By Day of the Week" })] }), _jsxs("span", { children: [money(M.rates[cat]?.perWeek || 0), "/wk"] })] }) }, cat))) })] }), Object.entries(groups).map(([g, list]) => _jsx(Section, { title: g, list: list, kind: "bill" }, g)), _jsxs("p", { className: "fine center", children: ["Regular bills come to about ", money(M.billsWk * 52 / 12), " a month."] })] }));
+    return (_jsxs(_Fragment, { children: [_jsx("p", { className: "intro", children: "This replaces the formulas in the sheet. Everything here feeds the forecast." }), _jsx(Section, { title: "Income", list: st.rules.filter((r) => r.kind === "in" && !r.retired), kind: "in", sub: "Set monthly pay to move off weekends in the item itself." }), _jsx(Section, { title: "Savings", list: st.rules.filter((r) => r.kind === "save" && !r.retired), kind: "save", sub: "Moved out of the spending account on each date." }), _jsxs("section", { className: "card", children: [_jsxs("div", { className: "row-between", children: [_jsx("h2", { children: "Budgets" }), _jsx("button", { className: "link", onClick: () => editRule({ kind: "budget", group: "Budgets" }), children: "Add" })] }), _jsx("p", { className: "fine", children: "What you log in the category uses these up." }), _jsx("ul", { className: "items plan", children: M.budgetCheck.map(({ rule: r, actualPer }) => (_jsxs("li", { children: [_jsxs("button", { onClick: () => editRule(r), children: [_jsxs("span", { className: "name", children: [_jsx(Name, { children: r.name }), _jsxs("small", { children: [describeRule(r), " \u00B7 You Average ", money(actualPer)] }), M.budgetNow[catOf(r)] && _jsx(BudgetBar, { spent: M.budgetNow[catOf(r)].spent, alloc: M.budgetNow[catOf(r)].alloc })] }), _jsx("span", { children: money(r.amt) })] }), actualPer > r.amt * 1.1 && _jsxs("button", { className: "mini", onClick: () => updRule({ ...r, amt: Math.round(actualPer) }), children: ["Use ", money(actualPer)] })] }, r.id))) })] }), _jsxs("section", { className: "card", children: [_jsxs("div", { className: "row-between", children: [_jsx("h2", { children: "Everyday Spending" }), st.cats.some((c) => !st.daily[c]) && _jsx("button", { className: "link", onClick: () => editDaily("+"), children: "Add" })] }), _jsxs("p", { className: "fine", children: ["What the forecast expects each day. Auto learns from the last ", st.settings.weeks, " weeks; set your own for things like parking."] }), _jsx("ul", { className: "items plan", children: Object.entries(st.daily).map(([cat, cfg]) => (_jsx("li", { children: _jsxs("button", { onClick: () => editDaily(cat), children: [_jsxs("span", { className: "name", children: [_jsx(Name, { children: cat }), _jsx("small", { children: cfg.mode === "manual" ? "Amounts You Set" : cfg.flat ? "Auto, Spread Evenly" : "Auto, By Day of the Week" })] }), _jsxs("span", { children: [money(M.rates[cat]?.perWeek || 0), "/wk"] })] }) }, cat))) })] }), Object.entries(groups).map(([g, list]) => _jsx(Section, { title: g, list: list, kind: "bill" }, g)), _jsxs("p", { className: "fine center", children: ["Regular bills come to about ", money(M.billsWk * 52 / 12), " a month."] })] }));
 }
 /* ---------- sheets ---------- */
+// Hints for the review list: what each entry looks like, so the unusual ones
+// come up for a decision. Hints never change the forecast by themselves; only
+// the one-off limit and your own calls do.
+function reviewHints(st, today) {
+    const norm = (t) => String(t || "").trim().toLowerCase();
+    const recent = st.logs.filter((l) => l.t === "spend" && !isBillLog(l) && isoToDn(l.d) >= today - 182 && isoToDn(l.d) <= today);
+    const amts = {};
+    recent.forEach((l) => (amts[l.c] ||= []).push(l.a));
+    const median = {};
+    for (const [c, a] of Object.entries(amts)) {
+        const x = [...a].sort((p, q) => p - q);
+        median[c] = x.length >= 4 ? x[Math.floor(x.length / 2)] : null;
+    }
+    const reps = {};
+    recent.forEach((l) => { const k = norm(l.n); if (k)
+        reps[k] = (reps[k] || 0) + 1; });
+    const bills = st.rules.filter((r) => r.kind === "bill" && !r.retired)
+        .map((r) => ({ r, k: norm(r.name.replace(/\s*\(.*\)/, "")) })).filter((b) => b.k.length >= 3);
+    // a bill match needs the name and a similar amount, so a shop at Amazon
+    // isn't mistaken for an Amazon subscription
+    const billFor = (n, a) => n && bills.find(({ k, r }) => (n === k || k.startsWith(`${n} `) || n.startsWith(`${k} `) || (k.length >= 4 && n.includes(k)))
+        && a >= r.amt * 0.4 && a <= r.amt * 1.6);
+    return (l) => {
+        const n = norm(l.n), m = median[l.c], r = reps[n] || 0;
+        return {
+            bill: billFor(n, l.a)?.r || null,
+            over: l.a > st.settings.cap,
+            unusual: !!m && l.a >= Math.max(2.5 * m, 40) && r < 3,
+            times: m ? l.a / m : 0,
+            repeats: r,
+        };
+    };
+}
+function ReviewSheet({ st, M, onMark, onMove, setSettings, onClose }) {
+    const [filter, setFilter] = useState("look");
+    const [before] = useState(M.dailyWk);
+    const [capIn, setCapIn] = useState(String(st.settings.cap));
+    const cap = st.settings.cap;
+    const hint = useMemo(() => reviewHints(st, M.today), [st, M.today]);
+    const all = M.winLogs.filter((l) => l.t === "spend" && !isBillLog(l))
+        .map((l) => ({ l, h: hint(l), one: isOneOff(l, cap) }));
+    // Worth a look: where the automatic call could be wrong. A big spend still
+    // counted as regular, an over-the-limit spend you make again and again, or
+    // something that looks like a bill. Anything you've already decided drops off.
+    const needsLook = ({ l, h }) => h.bill || (l.oo === undefined && ((h.unusual && !h.over) || (h.over && h.repeats >= 3)));
+    const shown = filter === "look" ? all.filter(needsLook) : all;
+    const byCat = {};
+    shown.forEach((x) => (byCat[x.l.c] ||= []).push(x));
+    const cats = Object.entries(byCat).sort((a, b) => b[1].reduce((s, x) => s + x.l.a, 0) - a[1].reduce((s, x) => s + x.l.a, 0));
+    const why = ({ l, h }) => l.oo === true ? "You Marked This a One-Off"
+        : l.oo === false ? "You Marked This Regular"
+            : h.over ? (h.repeats >= 3 ? `Over Your ${money(cap)} Limit, but Bought ${h.repeats} Times` : `Over Your ${money(cap)} Limit`)
+                : h.unusual ? `About ${Math.round(h.times)}× Your Usual ${l.c}`
+                    : h.repeats >= 3 ? `Bought ${h.repeats} Times Lately`
+                        : "Looks Like Everyday Spending";
+    const weight = +st.settings.oneOffWeight || 0;
+    const oneWk = (M.oneOffTotal / M.W) * 7;
+    const saveCap = () => { const v = Math.round(+capIn); if (v > 0 && v !== cap)
+        setSettings({ cap: v }); };
+    return (_jsxs(Sheet, { title: "Review Spending", onClose: onClose, children: [_jsxs("p", { className: "fine", children: ["Regular spending teaches the forecast your habits. One-offs are kept apart, so one big purchase doesn't make every future week look expensive. Covers the last ", st.settings.weeks, " weeks."] }), _jsx("p", { className: "lbl", children: "One-Offs in the Forecast" }), _jsx(Seg, { label: "One-Offs in the Forecast", small: true, value: weight, onChange: (v) => setSettings({ oneOffWeight: v }), options: [[0, "Leave Out"], [0.5, "Half"], [1, "Full"]] }), _jsx("p", { className: "fine", children: oneWk > 1
+                    ? _jsxs(_Fragment, { children: ["One-offs have averaged ", money(oneWk), " a week. ", weight === 0 ? "They're left out of the forecast." : weight === 0.5 ? `The forecast allows ${money(oneWk / 2)} a week for them, spread evenly.` : `The forecast allows ${money(oneWk)} a week for them, spread evenly.`] })
+                    : "No one-offs in this period." }), _jsxs("label", { className: "capfield", children: ["Automatic One-Off Over", _jsxs("span", { className: "amt-inline", children: [_jsx("span", { children: "$" }), _jsx("input", { inputMode: "numeric", value: capIn, onChange: (e) => setCapIn(clean(e.target.value)), onBlur: saveCap, onKeyDown: (e) => e.key === "Enter" && e.target.blur() })] })] }), _jsx("p", { className: "lbl", children: "Entries" }), _jsx(Seg, { label: "Show", small: true, value: filter, onChange: setFilter, options: [["look", `Worth a Look (${all.filter(needsLook).length})`], ["all", `Everything (${all.length})`]] }), cats.length === 0 && _jsx("p", { className: "fine", children: filter === "look" ? "Nothing stands out. Everything looks like it's in the right place." : "Nothing logged in this period." }), cats.map(([cat, list]) => (_jsxs("div", { className: "group", children: [_jsxs("div", { className: "row-between group-head", children: [_jsx("span", { children: cat }), _jsx("span", { children: money(list.reduce((s, x) => s + x.l.a, 0), true) })] }), _jsx("ul", { className: "items review", children: list.sort((a, b) => b.l.a - a.l.a || (a.l.d < b.l.d ? 1 : -1)).map((x) => (_jsxs("li", { children: [_jsxs("div", { className: "rv-main", children: [_jsxs("span", { className: "name", children: [_jsx(Name, { children: x.l.n || x.l.c }), _jsxs("small", { children: [dl(isoToDn(x.l.d), { weekday: "short", day: "numeric", month: "short" }), " \u00B7 ", why(x)] })] }), _jsx("span", { className: "rv-amt", children: money(x.l.a, true) })] }), _jsxs("div", { className: "rv-actions", children: [_jsxs("div", { className: "pick", role: "radiogroup", "aria-label": `${x.l.n || x.l.c}: regular or one-off`, children: [_jsx("button", { role: "radio", "aria-checked": !x.one, className: !x.one ? "on" : "", onClick: () => onMark(x.l, false), children: "Regular" }), _jsx("button", { role: "radio", "aria-checked": x.one, className: x.one ? "on one" : "", onClick: () => onMark(x.l, true), children: "One-Off" })] }), x.h.bill && _jsx("button", { className: "mini", onClick: () => onMove(x.l, BILLS_CAT), children: "Move to Bills" })] }), x.h.bill && _jsxs("p", { className: "fine rv-note", children: ["Looks like your ", x.h.bill.name, " bill, which is already in Plan."] })] }, x.l.id))) })] }, cat))), _jsxs("div", { className: "rv-foot", children: [_jsxs("div", { children: [_jsx("small", { children: "Expected Day-to-Day Spending" }), _jsxs("b", { children: [money(M.dailyWk), " a Week"] })] }), Math.abs(M.dailyWk - before) >= 1 && _jsxs("small", { className: M.dailyWk < before ? "pos" : "neg", children: ["Was ", money(before), " When You Opened This"] })] })] }));
+}
 function LogSheet({ st, M, init, onSave, onSaveRule, onDelete, onClose }) {
     const editing = !!init?.id;
     const [t, setT] = useState(init?.t === "fromSav" || init?.t === "in" ? "moneyIn" : init?.t || "spend");
@@ -18147,6 +18359,8 @@ function LogSheet({ st, M, init, onSave, onSaveRule, onDelete, onClose }) {
     const [a, setA] = useState(init?.a ? String(init.a) : "");
     const [n, setN] = useState(init?.n || "");
     const [d, setD] = useState(init?.d || dnToISO(M.today));
+    // undefined means "decide from the one-off limit"; true or false is your call
+    const [oo, setOo] = useState(init?.oo);
     const count = AFTERPAY_COUNT;
     const amtRef = useRef(null);
     const bodyRef = useRef(null);
@@ -18174,7 +18388,12 @@ function LogSheet({ st, M, init, onSave, onSaveRule, onDelete, onClose }) {
         if (!amt)
             return;
         const cat = type === "spend" ? c : type === "fromSav" ? "From savings" : type === "toSav" ? "To savings" : "From someone";
-        onSave({ ...(init?.id ? init : {}), id: init?.id || uid(), t: type, c: cat, a: Math.round(amt * 100) / 100, n: n.trim(), d, ts: init?.ts || Date.now(), u: Date.now() });
+        const entry = { ...(init?.id ? init : {}), id: init?.id || uid(), t: type, c: cat, a: Math.round(amt * 100) / 100, n: n.trim(), d, ts: init?.ts || Date.now(), u: Date.now() };
+        if (type === "spend" && !sameCat(cat, BILLS_CAT) && oo !== undefined)
+            entry.oo = oo;
+        else
+            delete entry.oo;
+        onSave(entry);
     };
     return (_jsxs(Sheet, { title: editing ? "Edit Entry" : isoToDn(d) === M.today ? "Log" : `Log, ${dl(isoToDn(d), { weekday: "short", day: "numeric", month: "short" })}`, onClose: onClose, children: [_jsx(Seg, { label: "Type", value: t, onChange: setT, options: LOG_TYPES, small: true, wrap: true }), _jsxs("div", { className: "logbody", ref: bodyRef, style: lockH ? { height: lockH } : undefined, children: [t === "moneyIn" && _jsxs(_Fragment, { children: [_jsx("p", { className: "lbl", children: "Where did it come from?" }), _jsx(Seg, { label: "Source", value: src, onChange: setSrc, options: SOURCES, small: true })] }), t === "spend" && _jsx("div", { className: "chips", role: "radiogroup", "aria-label": "Category", children: st.cats.map((x) => _jsx("button", { role: "radio", "aria-checked": c === x, className: `${c === x ? "on" : ""}${M.budgetNow[x] || M.budgetNow[String(x).trim().toLowerCase()] ? " budgeted" : ""}`, onClick: () => setC(x), children: x }, x)) }), t === "spend" && bud && (_jsxs("div", { className: `budgetnote${counts === false ? " off" : ""}`, children: [_jsxs("div", { className: "row-between", children: [_jsxs("span", { className: "name", children: [bud.name, " Budget"] }), _jsx("span", { children: money(bud.alloc, true) })] }), _jsx(BudgetBar, { spent: bud.spent, alloc: bud.alloc, pending: counts === false ? 0 : +a || 0 }), bud.ruleText && _jsx("p", { className: "fine", children: bud.ruleText }), _jsx("p", { className: "fine", children: counts === false
                                     ? _jsxs(_Fragment, { children: [_jsx("b", { children: "This one will not count." }), " It is under the ", money(bud.min, true), " minimum, so it is logged as everyday spending and the budget stays at ", money(bud.spent, true), " used."] })
@@ -18182,20 +18401,27 @@ function LogSheet({ st, M, init, onSave, onSaveRule, onDelete, onClose }) {
                                         ? (bud.spent + +a > bud.alloc + 0.005
                                             ? _jsxs(_Fragment, { children: ["This takes you ", money(bud.spent + +a - bud.alloc, true), " over the budget."] })
                                             : _jsxs(_Fragment, { children: ["This leaves ", money(bud.alloc - bud.spent - +a, true), " for the rest of the period."] }))
-                                        : _jsxs(_Fragment, { children: ["Counts towards this budget up to ", dl(bud.periodEnd), "."] }) })] })), t === "afterpay" && _jsx("p", { className: "lbl", children: "Total Amount Owing" }), _jsxs("div", { className: "amt", children: [_jsx("span", { children: "$" }), _jsx("input", { ref: amtRef, "aria-label": t === "afterpay" ? "Total amount owing" : "Amount", inputMode: "decimal", placeholder: "0.00", value: a, onChange: (e) => setA(clean(e.target.value)), onKeyDown: (e) => e.key === "Enter" && save() })] }), _jsx("input", { "aria-label": "Description", placeholder: type === "spend" ? "What was it?" : type === "in" ? "Who from?" : type === "afterpay" ? "What did you buy?" : "Note", value: n, onChange: (e) => setN(e.target.value) }), t === "spend" && notes.length > 0 && _jsx("div", { className: "chips notes", children: notes.map((x) => _jsx("button", { className: n === x.n ? "on" : "", onClick: () => setN(x.n), children: x.n }, x.n)) }), _jsxs("label", { className: "datefield", children: [t === "afterpay" ? "First Payment" : "Date", _jsx("input", { type: "date", value: d, onChange: (e) => setD(e.target.value) })] }), t === "afterpay" && (_jsxs(_Fragment, { children: [apDates.length > 0 ? (_jsxs("div", { className: "preview", children: [_jsxs("small", { children: [count, " Payments of ", money(per, true), ", Every Second ", DOW_LONG[dowOf(isoToDn(d))]] }), _jsx("div", { children: apDates.map((o) => _jsx("span", { children: dl(o.dn, { weekday: "short", day: "numeric", month: "short" }) }, o.dn)) })] })) : _jsx("p", { className: "fine", children: "Enter the total and pick the first payment date." }), _jsx("p", { className: "fine", children: "This goes into your plan as a bill, so the forecast counts every payment. Nothing is taken out today." })] })), type === "fromSav" && _jsx("p", { className: "fine", children: "Goes into the spending account and comes straight off total savings." }), type === "in" && _jsx("p", { className: "fine", children: "Goes into the spending account. Savings are untouched." }), type === "toSav" && _jsx("p", { className: "fine", children: "Comes out of the spending account and adds to savings. Your regular transfer is already in the plan, so only log extras here." })] }), t === "afterpay"
+                                        : _jsxs(_Fragment, { children: ["Counts towards this budget up to ", dl(bud.periodEnd), "."] }) })] })), t === "afterpay" && _jsx("p", { className: "lbl", children: "Total Amount Owing" }), _jsxs("div", { className: "amt", children: [_jsx("span", { children: "$" }), _jsx("input", { ref: amtRef, "aria-label": t === "afterpay" ? "Total amount owing" : "Amount", inputMode: "decimal", placeholder: "0.00", value: a, onChange: (e) => setA(clean(e.target.value)), onKeyDown: (e) => e.key === "Enter" && save() })] }), _jsx("input", { "aria-label": "Description", placeholder: type === "spend" ? "What was it?" : type === "in" ? "Who from?" : type === "afterpay" ? "What did you buy?" : "Note", value: n, onChange: (e) => setN(e.target.value) }), t === "spend" && notes.length > 0 && _jsx("div", { className: "chips notes", children: notes.map((x) => _jsx("button", { className: n === x.n ? "on" : "", onClick: () => setN(x.n), children: x.n }, x.n)) }), t === "spend" && !sameCat(c, BILLS_CAT) && (() => {
+                        const one = isOneOff({ a: +a || 0, oo }, st.settings.cap);
+                        return (_jsxs("div", { className: "ootog", children: [_jsxs("div", { children: [_jsx("b", { children: "One-Off Purchase" }), _jsx("small", { children: one ? "Kept Out of Your Usual Spending" : "Counts Towards Your Usual Spending" })] }), _jsx(Toggle, { on: one, onChange: (v) => setOo(v), label: "One-off purchase" })] }));
+                    })(), _jsxs("label", { className: "datefield", children: [t === "afterpay" ? "First Payment" : "Date", _jsx("input", { type: "date", value: d, onChange: (e) => setD(e.target.value) })] }), t === "afterpay" && (_jsxs(_Fragment, { children: [apDates.length > 0 ? (_jsxs("div", { className: "preview", children: [_jsxs("small", { children: [count, " Payments of ", money(per, true), ", Every Second ", DOW_LONG[dowOf(isoToDn(d))]] }), _jsx("div", { children: apDates.map((o) => _jsx("span", { children: dl(o.dn, { weekday: "short", day: "numeric", month: "short" }) }, o.dn)) })] })) : _jsx("p", { className: "fine", children: "Enter the total and pick the first payment date." }), _jsx("p", { className: "fine", children: "This goes into your plan as a bill, so the forecast counts every payment. Nothing is taken out today." })] })), type === "fromSav" && _jsx("p", { className: "fine", children: "Goes into the spending account and comes straight off total savings." }), type === "in" && _jsx("p", { className: "fine", children: "Goes into the spending account. Savings are untouched." }), type === "toSav" && _jsx("p", { className: "fine", children: "Comes out of the spending account and adds to savings. Your regular transfer is already in the plan, so only log extras here." })] }), t === "afterpay"
                 ? _jsxs("button", { className: "primary wide", disabled: !+a || !d, onClick: () => onSaveRule(apRule), children: ["Add ", count, " Payments of ", money(per, true)] })
                 : _jsx("button", { className: "primary wide", disabled: !+a, onClick: save, children: editing ? "Save Changes" : `Log ${+a ? money(+a, true) : ""}` }), editing && _jsx("button", { className: "danger wide", onClick: () => onDelete(init), children: "Delete Entry" })] }));
 }
 function RuleSheet({ st, rule, onSave, onDelete, onClose, today }) {
     const isNew = !rule.id;
-    const nextOcc = !isNew ? occurrences(rule, today, today + 800, {})[0] : null;
+    // The next payment that hasn't happened yet. A bill due today that has
+    // already been switched to "out" is done, so the next one is the one after.
+    const ovs = st.overrides || {};
+    const gone = (o) => o.dn === today && !(ovs[o.key]?.pending ?? rule.kind === "bill");
+    const nextOcc = !isNew ? occurrences(rule, today, today + 800, ovs).find((o) => !gone(o)) : null;
     const [f, setF] = useState({
         name: rule.name || "", kind: rule.kind || "bill", amt: rule.amt != null ? String(rule.amt) : "", freq: rule.freq || "monthly",
-        every: rule.every || 21, start: nextOcc ? dnToISO(nextOcc.dn) : rule.start || dnToISO(today + 1), end: rule.end || "",
+        every: rule.every || 21, start: nextOcc ? dnToISO(nextOcc.origDn ?? nextOcc.dn) : rule.start || dnToISO(today + 1), end: rule.end || "",
         shift: rule.shift || "", cat: rule.cat || st.cats[1], min: rule.min ? String(rule.min) : "", group: rule.group && !["Income", "Savings", "Budgets"].includes(rule.group) ? rule.group : "",
     });
     const set = (k) => (e) => setF({ ...f, [k]: e.target ? e.target.value : e });
-    const groups = Array.from(new Set(st.rules.filter((r) => r.kind === "bill").map((r) => r.group).filter(Boolean)));
+    const groups = Array.from(new Set(st.rules.filter((r) => r.kind === "bill" && !r.retired).map((r) => r.group).filter(Boolean)));
     const preview = useMemo(() => {
         if (!f.start)
             return [];
@@ -18529,7 +18755,7 @@ function MoneyApp() {
         shut();
         flash("Entry deleted", () => up((s) => ({ ...s, logs: [...s.logs, l], deleted: (s.deleted || []).filter((x) => x !== l.id) })));
     };
-    const saveRule = (r) => { up((s) => ({ ...s, rules: s.rules.some((x) => x.id === r.id) ? s.rules.map((x) => (x.id === r.id ? r : x)) : [...s.rules, r] }), true); shut(); flash(`${r.name} saved`); };
+    const saveRule = (r) => { up((s) => applyRuleEdit(s, r, M.today), true); shut(); flash(`${r.name} saved`); };
     const deleteRule = (r) => { up((s) => ({ ...s, rules: s.rules.filter((x) => x.id !== r.id) }), true); shut(); flash(`${r.name} removed`, () => up((s) => ({ ...s, rules: [...s.rules, r] }), true)); };
     // `dflt` is what this kind of item does when untouched, so an override is
     // only stored when the answer differs from it.
@@ -18571,6 +18797,10 @@ function MoneyApp() {
     };
     const addToPlan = (a) => saveRule({ id: uid(), name: a.name, kind: "bill", amt: a.amt, freq: "once", start: a.d, group: "Planned", active: true });
     const openLog = (init) => setModal({ type: "log", init });
+    const openReview = () => setModal({ type: "review" });
+    // Your call on whether an entry is a habit or a one-off. Stamped so it syncs.
+    const markOneOff = (l, one) => up((s) => ({ ...s, logs: s.logs.map((x) => (x.id === l.id ? { ...x, oo: one, u: Date.now() } : x)) }));
+    const moveLog = (l, cat) => { up((s) => ({ ...s, logs: s.logs.map((x) => (x.id === l.id ? { ...x, c: cat, u: Date.now() } : x)) })); flash(`Moved to ${cat}`); };
     // The day stepper on Overview sets which day a new entry is dated. Anywhere
     // else, or on today, a new entry is dated today.
     const logDay = tab === "overview" && sel != null && sel !== M.today ? sel : null;
@@ -18584,7 +18814,7 @@ function MoneyApp() {
                             await runSync();
                             setSyncing(false);
                         }, "aria-label": !syncCfg ? "Drive sync isn't set up. Tap to set it up."
-                            : st.lastSync ? `Last synced ${ago(st.lastSync).toLowerCase()}. Tap to sync now.` : "Never synced. Tap to sync now.", children: [_jsx("i", { className: syncCfg ? syncLight(st.lastSync) : "red" }), _jsx("span", { children: syncing ? "Syncing…" : !syncCfg ? "Not Set Up" : st.lastSync ? ago(st.lastSync) : "Never" })] }), _jsx("button", { className: "icon", "aria-label": "Settings", onClick: () => setModal({ type: "settings" }), children: _jsxs("svg", { width: "20", height: "20", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", "aria-hidden": "true", children: [_jsx("path", { d: "M4 7h10M18 7h2M4 17h4M12 17h8" }), _jsx("circle", { cx: "16", cy: "7", r: "2" }), _jsx("circle", { cx: "10", cy: "17", r: "2" })] }) })] }), tab !== "overview" && (_jsxs("div", { className: "scorebar", children: [_jsx("span", { children: "Current Balance" }), _jsx("b", { className: M.spNow < 0 ? "short" : "", children: money(M.spNow, true) })] })), !storageOk && _jsx("div", { className: "note warn", children: "Changes can't be saved in this view. Open the published app, or copy a backup from settings before closing." }), _jsxs("main", { className: "tab-view", children: [tab === "overview" && _jsx(Overview, { st: st, M: M, sel: sel, setSel: setSel, openLog: openLog, openOverride: openOverride, onPending: setPending, go: setTab, openReconcile: () => setModal({ type: "reconcile" }), confirmAnchor: setAnchor }), tab === "forecast" && _jsx(Forecast, { st: st, M: M, setSettings: setSettings, SC: SC, setSC: setSC, openLog: openLog, addToPlan: addToPlan, openOverride: openOverride }), tab === "log" && _jsx(LogTab, { st: st, M: M, openLog: openLog, openOverride: openOverride, go: setTab }), tab === "plan" && _jsx(Plan, { st: st, M: M, editRule: (r) => setModal({ type: "rule", r }), editDaily: (cat) => setModal({ type: "daily", cat }), updRule: saveRule })] }, tab), _jsxs("nav", { className: "navbar", role: "tablist", "aria-label": "Sections", children: [NAV.map(([k, label, d]) => (_jsxs("button", { role: "tab", "aria-selected": tab === k, "aria-label": label, className: tab === k ? "on" : "", onClick: () => setTab(k), children: [_jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: d }) }), tab === k && _jsx("em", { children: label })] }, k))), _jsx("button", { className: "nav-add", onClick: () => openLog(logDay == null ? null : { d: dnToISO(logDay) }), "aria-label": "Log a spend or transfer", children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", "aria-hidden": "true", children: _jsx("path", { d: "M12 5v14M5 12h14" }) }) })] }), toast && _jsxs("div", { className: "toast", role: "status", children: [_jsx("span", { children: toast.msg }), toast.undo && _jsx("button", { onClick: () => { toast.undo(); setToast(null); }, children: "Undo" })] }), _jsxs("div", { className: `modal-shell${closing ? " closing" : ""}`, children: [modal?.type === "log" && _jsx(LogSheet, { st: st, M: M, init: modal.init, onSave: saveLog, onSaveRule: saveRule, onDelete: deleteLog, onClose: () => shut() }), modal?.type === "rule" && _jsx(RuleSheet, { st: st, rule: modal.r, today: M.today, onSave: saveRule, onDelete: deleteRule, onClose: () => shut() }), modal?.type === "daily" && modal.cat === "+" && (_jsxs(Sheet, { title: "Add to Everyday Spending", onClose: () => shut(), children: [_jsx("p", { className: "fine", children: "Pick a category to forecast day by day. Anything already covered by a budget or a bill doesn't need one." }), _jsx("div", { className: "chips", children: st.cats.filter((c) => !st.daily[c]).map((c) => (_jsx("button", { onClick: () => { up((s) => ({ ...s, daily: { ...s.daily, [c]: { mode: "auto", flat: true } } }), true); setModal({ type: "daily", cat: c }); }, children: c }, c))) })] })), modal?.type === "daily" && modal.cat !== "+" && _jsx(DailySheet, { st: st, M: M, cat: modal.cat, onRemove: (cat) => { up((s) => { const d = { ...s.daily }; delete d[cat]; return { ...s, daily: d }; }, true); shut(); }, onSave: (cat, cfg) => { up((s) => ({ ...s, daily: { ...s.daily, [cat]: cfg } }), true); shut(); }, onClose: () => shut() }), modal?.type === "override" && _jsx(OverrideSheet, { o: modal.o, today: M.today, onSave: saveOverride, onConfirm: confirmSpend, onClose: () => shut() }), modal?.type === "reconcile" && _jsx(ReconcileSheet, { M: M, st: st, onSave: setAnchor, onClose: () => shut() }), modal?.type === "settings" && _jsx(SettingsSheet, { st: st, setSettings: setSettings, storageOk: storageOk, onShared: onShared, onCats: (cats) => up((s) => ({ ...s, cats }), true), onSaved: () => up((s) => ({ ...s, lastBackup: Date.now() })), onSync: runSync, onRestore: (s) => { setSt({ ...migrate(s), updated: Date.now(), cfgUpdated: Date.now() }); shut(); flash("Backup restored"); }, onClose: () => shut() })] })] }));
+                            : st.lastSync ? `Last synced ${ago(st.lastSync).toLowerCase()}. Tap to sync now.` : "Never synced. Tap to sync now.", children: [_jsx("i", { className: syncCfg ? syncLight(st.lastSync) : "red" }), _jsx("span", { children: syncing ? "Syncing…" : !syncCfg ? "Not Set Up" : st.lastSync ? ago(st.lastSync) : "Never" })] }), _jsx("button", { className: "icon", "aria-label": "Settings", onClick: () => setModal({ type: "settings" }), children: _jsxs("svg", { width: "20", height: "20", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", "aria-hidden": "true", children: [_jsx("path", { d: "M4 7h10M18 7h2M4 17h4M12 17h8" }), _jsx("circle", { cx: "16", cy: "7", r: "2" }), _jsx("circle", { cx: "10", cy: "17", r: "2" })] }) })] }), tab !== "overview" && (_jsxs("div", { className: "scorebar", children: [_jsx("span", { children: "Current Balance" }), _jsx("b", { className: M.spNow < 0 ? "short" : "", children: money(M.spNow, true) })] })), !storageOk && _jsx("div", { className: "note warn", children: "Changes can't be saved in this view. Open the published app, or copy a backup from settings before closing." }), _jsxs("main", { className: "tab-view", children: [tab === "overview" && _jsx(Overview, { st: st, M: M, sel: sel, setSel: setSel, openLog: openLog, openReview: openReview, openOverride: openOverride, onPending: setPending, go: setTab, openReconcile: () => setModal({ type: "reconcile" }), confirmAnchor: setAnchor }), tab === "forecast" && _jsx(Forecast, { st: st, M: M, setSettings: setSettings, SC: SC, setSC: setSC, openLog: openLog, addToPlan: addToPlan, openOverride: openOverride }), tab === "log" && _jsx(LogTab, { st: st, M: M, openLog: openLog, openReview: openReview, openOverride: openOverride, go: setTab }), tab === "plan" && _jsx(Plan, { st: st, M: M, editRule: (r) => setModal({ type: "rule", r }), editDaily: (cat) => setModal({ type: "daily", cat }), updRule: saveRule })] }, tab), _jsxs("nav", { className: "navbar", role: "tablist", "aria-label": "Sections", children: [NAV.map(([k, label, d]) => (_jsxs("button", { role: "tab", "aria-selected": tab === k, "aria-label": label, className: tab === k ? "on" : "", onClick: () => setTab(k), children: [_jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: d }) }), tab === k && _jsx("em", { children: label })] }, k))), _jsx("button", { className: "nav-add", onClick: () => openLog(logDay == null ? null : { d: dnToISO(logDay) }), "aria-label": "Log a spend or transfer", children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", "aria-hidden": "true", children: _jsx("path", { d: "M12 5v14M5 12h14" }) }) })] }), toast && _jsxs("div", { className: "toast", role: "status", children: [_jsx("span", { children: toast.msg }), toast.undo && _jsx("button", { onClick: () => { toast.undo(); setToast(null); }, children: "Undo" })] }), _jsxs("div", { className: `modal-shell${closing ? " closing" : ""}`, children: [modal?.type === "log" && _jsx(LogSheet, { st: st, M: M, init: modal.init, onSave: saveLog, onSaveRule: saveRule, onDelete: deleteLog, onClose: () => shut() }), modal?.type === "rule" && _jsx(RuleSheet, { st: st, rule: modal.r, today: M.today, onSave: saveRule, onDelete: deleteRule, onClose: () => shut() }), modal?.type === "daily" && modal.cat === "+" && (_jsxs(Sheet, { title: "Add to Everyday Spending", onClose: () => shut(), children: [_jsx("p", { className: "fine", children: "Pick a category to forecast day by day. Anything already covered by a budget or a bill doesn't need one." }), _jsx("div", { className: "chips", children: st.cats.filter((c) => !st.daily[c]).map((c) => (_jsx("button", { onClick: () => { up((s) => ({ ...s, daily: { ...s.daily, [c]: { mode: "auto", flat: true } } }), true); setModal({ type: "daily", cat: c }); }, children: c }, c))) })] })), modal?.type === "daily" && modal.cat !== "+" && _jsx(DailySheet, { st: st, M: M, cat: modal.cat, onRemove: (cat) => { up((s) => { const d = { ...s.daily }; delete d[cat]; return { ...s, daily: d }; }, true); shut(); }, onSave: (cat, cfg) => { up((s) => ({ ...s, daily: { ...s.daily, [cat]: cfg } }), true); shut(); }, onClose: () => shut() }), modal?.type === "override" && _jsx(OverrideSheet, { o: modal.o, today: M.today, onSave: saveOverride, onConfirm: confirmSpend, onClose: () => shut() }), modal?.type === "reconcile" && _jsx(ReconcileSheet, { M: M, st: st, onSave: setAnchor, onClose: () => shut() }), modal?.type === "review" && _jsx(ReviewSheet, { st: st, M: M, onMark: markOneOff, onMove: moveLog, setSettings: setSettings, onClose: () => shut() }), modal?.type === "settings" && _jsx(SettingsSheet, { st: st, setSettings: setSettings, storageOk: storageOk, onShared: onShared, onCats: (cats) => up((s) => ({ ...s, cats }), true), onSaved: () => up((s) => ({ ...s, lastBackup: Date.now() })), onSync: runSync, onRestore: (s) => { setSt({ ...migrate(s), updated: Date.now(), cfgUpdated: Date.now() }); shut(); flash("Backup restored"); }, onClose: () => shut() })] })] }));
 }
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap');
@@ -18702,6 +18932,32 @@ main{display:flex;flex-direction:column;gap:12px}
 .items{list-style:none;margin:6px 0 0;padding:0}
 .items li{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);font-size:14px}
 .items li:last-child{border-bottom:0}
+/* a heading inside a list, splitting bills from spending */
+.items li.ghead{justify-content:space-between;padding:16px 0 7px;font-size:12px;letter-spacing:.05em;color:var(--muted);font-weight:600;border-bottom:1px solid var(--line)}
+.items li.ghead:first-child{padding-top:6px}
+/* review list: each entry gets its own Regular / One-Off choice */
+.items.review li{display:block;padding:12px 0}
+.rv-main{display:flex;align-items:center;gap:10px}
+.rv-main .name{flex:1;min-width:0}
+.rv-amt{font-weight:600;white-space:nowrap}
+.rv-actions{display:flex;align-items:center;gap:10px;margin-top:9px;flex-wrap:wrap}
+.pick{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:3px;background:var(--card2)}
+.pick button{padding:6px 13px!important;border-radius:999px;font-size:12.5px;font-weight:600;color:var(--muted)}
+.pick button.on{background:var(--pos)!important;color:#04121F}
+.pick button.on.one{background:var(--yellow)!important}
+.rv-note{margin:8px 0 0!important}
+.rv-foot{position:sticky;bottom:-1px;margin:18px -2px 0;padding:14px 16px;border-radius:16px;background:var(--card2);border:1px solid var(--line);display:flex;flex-direction:column;gap:3px}
+.rv-foot>div{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.rv-foot small{font-size:12px;color:var(--muted)}
+.rv-foot small.pos{color:var(--pos)}.rv-foot small.neg{color:var(--neg)}
+.rv-foot b{font-size:16px;white-space:nowrap}
+.capfield{display:flex!important;align-items:center;justify-content:space-between;gap:12px;margin-top:12px}
+.amt-inline{display:inline-flex;align-items:center;gap:4px;flex-shrink:0}
+.app .amt-inline input{width:92px!important;text-align:right;margin:0!important}
+.ootog{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:14px 0 8px;padding:11px 14px;border-radius:14px;background:var(--card2);border:1px solid var(--line)}
+.ootog b{display:block;font-size:14px;font-weight:600}
+.ootog small{display:block;font-size:12px;color:var(--muted);margin-top:2px}
+.items li.ghead span:last-child{font-weight:600;color:var(--muted)}
 .items li>button:first-child{display:flex;align-items:center;gap:11px;width:100%;flex:1;min-width:0;padding:11px 0!important}
 .items li .tog{margin-left:4px}
 .items .name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
