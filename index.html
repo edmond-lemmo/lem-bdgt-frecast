@@ -17303,7 +17303,7 @@ function installStorageShim() {
 /* Starting data: rules and history imported from Budget_2026.xlsx. After that,
    everything lives in this app. */
 const SEED = { "v": 3, "updated": 0, "cfgUpdated": 0, "anchor": { "d": "2026-09-12", "ts": 0, "spending": 0, "savings": 0, "confirmed": false }, "logs": [], "rules": [], "overrides": {}, "deleted": [], "daily": { "Everyday": { "mode": "auto" }, "Shopping": { "mode": "auto", "flat": true } }, "cats": ["Everyday", "Groceries", "Parking", "Petrol", "Shopping", "Gift", "Bills"], "settings": { "buffer": 200, "weeks": 8, "cap": 250, "horizon": 31, "shared": false } };
-const BUILD = "22 Sept 2026 06:57";
+const BUILD = "22 Sept 2026 10:26";
 const DAYMS = 86400000;
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DOW_LONG = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -17407,9 +17407,14 @@ function describeRule(r) {
     return `${FREQS[r.freq]} on the ${d}${sfx}`;
 }
 // Does a log entry count towards the current balance (i.e. after the last balance check)?
+// Is an entry on top of the balances you last set? Anything dated after that
+// day is. On the day itself it depends on when the entry landed on that date:
+// before you set balances, the bank figure already had it; after, it didn't.
+// `dts` is when the entry's date was last set (an entry moved from Friday to
+// today lands today when it's moved, not when it was first logged).
 const afterAnchor = (log, anchor, A) => {
     const d = isoToDn(log.d);
-    return d > A || (d === A && (log.ts || 0) > anchor.ts);
+    return d > A || (d === A && (log.dts ?? log.ts ?? 0) > anchor.ts);
 };
 const flowOf = (log) => {
     const a = +log.a || 0;
@@ -17532,7 +17537,12 @@ function buildModel(state, SC = {}, todayOverride) {
     // pending and is switched on once it lands. Days before today have settled,
     // and income and savings transfers default to having gone through.
     const pendingOf = (o, kind, dn) => overrides[o.key]?.pending ?? (kind === "bill" && dn === today);
-    fixed.forEach((r) => occurrences(r, A + 1, today, overrides).forEach((o) => {
+    // Scheduled items on the day balances were set are already in that figure,
+    // unless they were switched to "out" or moved onto that day afterwards.
+    const changedSince = (o) => (overrides[o.key]?.at || 0) > (anchor.ts || 0);
+    fixed.forEach((r) => occurrences(r, A, today, overrides).forEach((o) => {
+        if (o.dn === A && !changedSince(o))
+            return;
         if (pendingOf(o, r.kind, o.dn))
             return; // scheduled, but not in the account yet
         if (r.kind === "in")
@@ -18400,7 +18410,10 @@ function LogSheet({ st, M, init, onSave, onSaveRule, onDelete, onClose }) {
         if (!amt)
             return;
         const cat = type === "spend" ? c : type === "fromSav" ? "From savings" : type === "toSav" ? "To savings" : "From someone";
-        const entry = { ...(init?.id ? init : {}), id: init?.id || uid(), t: type, c: cat, a: Math.round(amt * 100) / 100, n: n.trim(), d, ts: init?.ts || Date.now(), u: Date.now() };
+        const now = Date.now();
+        const entry = { ...(init?.id ? init : {}), id: init?.id || uid(), t: type, c: cat, a: Math.round(amt * 100) / 100, n: n.trim(), d, ts: init?.ts || now, u: now };
+        if (init?.id && init.d !== d)
+            entry.dts = now; // moved to a new date just now
         if (type === "spend" && !sameCat(cat, BILLS_CAT) && oo !== undefined)
             entry.oo = oo;
         else
@@ -18811,18 +18824,37 @@ function MoneyApp() {
         const o = { ...s.overrides };
         const rest = { ...(o[key] || {}) };
         delete rest.pending;
+        // `at` records when it went through, so a bill switched to "out" after
+        // balances were set that day still comes off the balance
         if (pending !== dflt)
-            o[key] = { ...rest, pending };
-        else if (Object.keys(rest).length)
+            o[key] = { ...rest, pending, at: Date.now() };
+        else if (delete rest.at, Object.keys(rest).length)
             o[key] = rest;
         else
             delete o[key];
         return { ...s, overrides: o };
     }, true);
-    const saveOverride = (key, v) => { up((s) => { const o = { ...s.overrides }; if (v)
-        o[key] = v;
-    else
-        delete o[key]; return { ...s, overrides: o }; }, true); shut(); };
+    // Changing one payment keeps whether it has already gone through; moving it
+    // to another day records when, like switching it to "out" does.
+    const saveOverride = (key, v) => {
+        up((s) => {
+            const o = { ...s.overrides };
+            if (!v) {
+                delete o[key];
+                return { ...s, overrides: o };
+            }
+            const old = o[key] || {};
+            const keep = {};
+            if (old.pending !== undefined && !v.skip)
+                keep.pending = old.pending;
+            if (old.at)
+                keep.at = old.at;
+            const moved = (v.moveTo || null) !== (old.moveTo || null);
+            o[key] = { ...keep, ...v, ...(moved ? { at: Date.now() } : {}) };
+            return { ...s, overrides: o };
+        }, true);
+        shut();
+    };
     const confirmSpend = (o, amount, note, iso) => {
         // Budgets are matched by category, which is not always the rule's name.
         const cat = o.cat || o.name;
