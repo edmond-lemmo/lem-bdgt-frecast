@@ -17303,7 +17303,7 @@ function installStorageShim() {
 /* Starting data: rules and history imported from Budget_2026.xlsx. After that,
    everything lives in this app. */
 const SEED = { "v": 3, "updated": 0, "cfgUpdated": 0, "anchor": { "d": "2026-09-12", "ts": 0, "spending": 0, "savings": 0, "confirmed": false }, "logs": [], "rules": [], "overrides": {}, "deleted": [], "daily": { "Everyday": { "mode": "auto" }, "Shopping": { "mode": "auto", "flat": true } }, "cats": ["Everyday", "Groceries", "Parking", "Petrol", "Shopping", "Gift", "Bills"], "settings": { "buffer": 200, "weeks": 8, "cap": 250, "horizon": 31, "shared": false } };
-const BUILD = "25 Sept 2026 18:01";
+const BUILD = "01 Oct 2026 18:21";
 const DAYMS = 86400000;
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DOW_LONG = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -18266,8 +18266,24 @@ function Forecast({ st, M, setSettings, SC, setSC, openOverride, openLog, addToP
             })] }));
 }
 /* ---------- Log ---------- */
+// A day's header in the Log lists. Tapping it opens or closes the day.
+function DayHead({ label, total, count, open, onToggle }) {
+    return (_jsxs("button", { className: "row-between group-head tap", "aria-expanded": open, onClick: onToggle, children: [_jsxs("span", { className: "gh-left", children: [label, !open && _jsxs("small", { className: "gh-count", children: [count, " ", count === 1 ? "Entry" : "Entries"] })] }), _jsxs("span", { className: "gh-right", children: [total, _jsx("i", { className: `chev${open ? " up" : ""}`, "aria-hidden": "true" })] })] }));
+}
 function LogTab({ st, M, openLog, openOverride, go, view, setView, reviewProps }) {
     const [limit, setLimit] = useState(40);
+    // Days start closed, apart from today in Recent. Your taps override that.
+    const [open, setOpen] = useState({});
+    const dflt = (d) => view === "recent" && d === M.today;
+    const isOpen = (d) => open[`${view}:${d}`] ?? dflt(d);
+    const toggle = (d) => setOpen((o) => ({ ...o, [`${view}:${d}`]: !(o[`${view}:${d}`] ?? dflt(d)) }));
+    const setAll = (days, v) => setOpen((o) => ({ ...o, ...Object.fromEntries(days.map((d) => [`${view}:${d}`, v])) }));
+    const AllToggle = ({ days }) => {
+        if (days.length < 2)
+            return null;
+        const anyShut = days.some((d) => !isOpen(d));
+        return _jsx("div", { className: "all-toggle", children: _jsx("button", { className: "link", onClick: () => setAll(days, anyShut), children: anyShut ? "Expand All" : "Collapse All" }) });
+    };
     const upcoming = [];
     for (const d of M.days.slice(1, M.H + 1))
         for (const e of d.events)
@@ -18291,11 +18307,13 @@ function LogTab({ st, M, openLog, openOverride, go, view, setView, reviewProps }
     const upByDay = [];
     upcoming.forEach((e) => { if (!upByDay.length || upByDay[upByDay.length - 1].d !== e.dn)
         upByDay.push({ d: e.dn, list: [] }); upByDay[upByDay.length - 1].list.push(e); });
-    return (_jsxs(_Fragment, { children: [_jsx(Seg, { label: "View", value: view, onChange: setView, options: [["recent", "Recent"], ["upcoming", "Upcoming"], ["review", "Review"]] }), view === "review" ? _jsx(Review, { st: st, M: M, ...reviewProps }) : view === "upcoming" ? (_jsxs("section", { className: "card", children: [upByDay.map((g) => (_jsxs("div", { className: "group", children: [_jsxs("div", { className: "row-between group-head", children: [_jsx("span", { children: dayName(g.d, M.today) }), _jsx("span", { children: money(g.list.reduce((a, e) => a + (e.kind === "in" ? 0 : e.kind === "budget" ? e.left : e.amt), 0)) })] }), _jsx("ul", { className: "items", children: g.list.map((e) => (_jsx("li", { children: _jsxs("button", { onClick: () => openOverride({ key: e.key, name: e.name, dn: g.d, origDn: e.origDn, amt: e.amt, overridden: e.overridden,
-                                            budget: e.kind === "budget", spent: e.spent, left: e.left, alloc: e.alloc, cat: e.cat, min: e.min, window: e.window, periodStart: e.periodStart }), children: [_jsx("span", { className: `dot ${e.kind}`, "aria-hidden": "true" }), _jsxs("span", { className: "name", children: [_jsx(Name, { children: e.name }), _jsx("small", { children: e.kind === "in" ? "Income" : e.kind === "save" ? "To Savings" : e.kind === "budget" ? "Budget" : e.moved ? "Bill, Moved" : "Bill" })] }), _jsxs("span", { className: e.kind === "in" ? "pos" : "", children: [e.kind === "in" ? "+" : "", money(e.kind === "budget" ? e.left : e.amt)] })] }) }, e.key))) })] }, g.d))), _jsx("button", { className: "link", onClick: () => go("plan"), children: "Change a Regular Amount in Plan" })] })) : (_jsxs("section", { className: "card", children: [byDay.length === 0 && _jsx("p", { className: "fine", children: "Nothing logged yet. Tap Log to add your first entry." }), byDay.map((g) => {
-                        const sp = g.list.filter((e) => groupOf(e) === "spend").reduce((a, e) => a + e.amt, 0);
+    return (_jsxs(_Fragment, { children: [_jsx(Seg, { label: "View", value: view, onChange: setView, options: [["recent", "Recent"], ["upcoming", "Upcoming"], ["review", "Review"]] }), view === "review" ? _jsx(Review, { st: st, M: M, ...reviewProps }) : view === "upcoming" ? (_jsxs("section", { className: "card", children: [_jsx(AllToggle, { days: upByDay.map((g) => g.d) }), upByDay.map((g) => (_jsxs("div", { className: "group", children: [_jsx(DayHead, { label: dayName(g.d, M.today), count: g.list.length, open: isOpen(g.d), onToggle: () => toggle(g.d), total: money(g.list.reduce((a, e) => a + (e.kind === "in" ? 0 : e.kind === "budget" ? e.left : e.amt), 0)) }), isOpen(g.d) && _jsx("ul", { className: "items", children: g.list.map((e) => (_jsx("li", { children: _jsxs("button", { onClick: () => openOverride({ key: e.key, name: e.name, dn: g.d, origDn: e.origDn, amt: e.amt, overridden: e.overridden,
+                                            budget: e.kind === "budget", spent: e.spent, left: e.left, alloc: e.alloc, cat: e.cat, min: e.min, window: e.window, periodStart: e.periodStart }), children: [_jsx("span", { className: `dot ${e.kind}`, "aria-hidden": "true" }), _jsxs("span", { className: "name", children: [_jsx(Name, { children: e.name }), _jsx("small", { children: e.kind === "in" ? "Income" : e.kind === "save" ? "To Savings" : e.kind === "budget" ? "Budget" : e.moved ? "Bill, Moved" : "Bill" })] }), _jsxs("span", { className: e.kind === "in" ? "pos" : "", children: [e.kind === "in" ? "+" : "", money(e.kind === "budget" ? e.left : e.amt)] })] }) }, e.key))) })] }, g.d))), _jsx("button", { className: "link", onClick: () => go("plan"), children: "Change a Regular Amount in Plan" })] })) : (_jsxs("section", { className: "card", children: [byDay.length === 0 && _jsx("p", { className: "fine", children: "Nothing logged yet. Tap Log to add your first entry." }), _jsx(AllToggle, { days: byDay.map((g) => g.d) }), byDay.map((g) => {
+                        // the day's header is everything that went out (spending and bills);
+                        // the groups inside split it
+                        const sp = g.list.filter((e) => groupOf(e) === "spend" || (groupOf(e) === "bills")).reduce((a, e) => a + e.amt, 0);
                         const groups = DAY_GROUPS.map(([id, label]) => ({ id, label, list: g.list.filter((e) => groupOf(e) === id) })).filter((x) => x.list.length);
-                        return (_jsxs("div", { className: "group", children: [_jsxs("div", { className: "row-between group-head", children: [_jsx("span", { children: dayName(g.d, M.today) }), _jsx("span", { children: money(sp, true) })] }), _jsx("ul", { className: "items", children: groups.map((x) => [
+                        return (_jsxs("div", { className: "group", children: [_jsx(DayHead, { label: dayName(g.d, M.today), count: g.list.length, total: money(sp, true), open: isOpen(g.d), onToggle: () => toggle(g.d) }), isOpen(g.d) && _jsx("ul", { className: "items", children: groups.map((x) => [
                                         _jsxs("li", { className: "ghead", children: [_jsx("span", { children: x.label }), _jsx("span", { children: money(x.list.reduce((a, e) => a + e.amt, 0), true) })] }, `h-${x.id}`),
                                         ...x.list.map((e) => (_jsx("li", { children: _jsxs("button", { onClick: () => (e.kind === "log" ? openLog(e.log) : openOverride({ key: e.key, name: e.name, dn: g.d, origDn: e.origDn, amt: e.amt, overridden: e.overridden })), children: [_jsx("span", { className: `dot ${e.kind === "log" ? (isBillLog(e.log) ? "bill" : e.log.t === "spend" ? "est" : e.log.t === "toSav" ? "save" : "in") : e.kind}`, "aria-hidden": "true" }), _jsxs("span", { className: "name", children: [_jsx(Name, { children: e.name }), _jsx("small", { children: e.kind === "log" ? (e.log.t === "spend" && !isBillLog(e.log) ? e.log.c : logLabel(e.log))
                                                                     : e.kind === "in" ? "Income, From Plan" : e.kind === "save" ? "To Savings, From Plan" : "Bill, From Plan" })] }), _jsxs("span", { className: e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "pos" : "", children: [e.kind === "in" || (e.kind === "log" && e.delta > 0) ? "+" : "", money(e.amt, true)] })] }) }, e.key))),
@@ -19092,6 +19110,16 @@ main{display:flex;flex-direction:column;gap:12px}
 .group:first-child{margin-top:0}
 .group-head{font-size:14px;font-weight:700;color:var(--blue);border-bottom:1px solid rgba(14,178,255,.35);padding-bottom:7px;gap:8px;letter-spacing:.01em}
 .group + .group{margin-top:22px}
+/* tappable day header: whole row opens and closes the day */
+.group-head.tap{display:flex;width:100%;align-items:center;text-align:left;background:none!important;border-radius:0;padding:4px 0 7px!important;color:var(--blue);font:inherit;font-size:14px;font-weight:700;cursor:pointer}
+.gh-left{display:flex;align-items:baseline;gap:8px;min-width:0}
+.gh-count{font-size:11.5px;font-weight:500;color:var(--muted);white-space:nowrap}
+.gh-right{display:flex;align-items:center;gap:10px;white-space:nowrap}
+.chev{width:7px;height:7px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg) translateY(-2px);transition:transform .2s ease;display:inline-block}
+.chev.up{transform:rotate(-135deg) translate(-1px,-1px)}
+.group-head.tap + .items{animation:fadeIn .18s ease-out both}
+.all-toggle{display:flex;justify-content:flex-end;margin:-4px 0 2px}
+.all-toggle .link{font-size:13px;padding:2px 0!important}
 .group-head span:last-child{white-space:nowrap}
 .events{list-style:none;margin:6px 0 0;padding:0}
 .events li{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);font-size:14px}
