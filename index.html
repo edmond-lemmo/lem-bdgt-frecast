@@ -17303,7 +17303,7 @@ function installStorageShim() {
 /* Starting data: rules and history imported from Budget_2026.xlsx. After that,
    everything lives in this app. */
 const SEED = { "v": 3, "updated": 0, "cfgUpdated": 0, "anchor": { "d": "2026-09-12", "ts": 0, "spending": 0, "savings": 0, "confirmed": false }, "logs": [], "rules": [], "overrides": {}, "deleted": [], "daily": { "Everyday": { "mode": "auto" }, "Shopping": { "mode": "auto", "flat": true } }, "cats": ["Everyday", "Groceries", "Parking", "Petrol", "Shopping", "Gift", "Bills"], "settings": { "buffer": 200, "weeks": 8, "cap": 250, "horizon": 31, "shared": false } };
-const BUILD = "07 Oct 2026 22:44";
+const BUILD = "08 Oct 2026 07:00";
 const DAYMS = 86400000;
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DOW_LONG = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -17334,6 +17334,47 @@ function shiftWeekend(dn, shift) {
 // All occurrences of a rule between two day numbers (inclusive), overrides applied.
 // An override can change the amount, skip the date, or move that one payment
 // to another day. Moved payments keep the key of their original date.
+// A bill marked "Amount Varies" carries what it has learned (see learnRules).
+// Bills still to come use it: the same time last year if there's one within
+// three weeks, otherwise the average of the last three. Past bills keep their
+// own amounts, so balances never change after the fact.
+function learnedAmt(rule, dn) {
+    const est = rule.est;
+    if (!est || dn <= est.from)
+        return rule.amt;
+    const lastYear = est.pts.filter((p) => Math.abs(dn - 365 - p.dn) <= 21).sort((a, b) => Math.abs(dn - 365 - a.dn) - Math.abs(dn - 365 - b.dn))[0];
+    return lastYear ? lastYear.a : est.avg;
+}
+// Work out what each varying bill has really cost. A past bill's actual
+// amount is what you corrected it to on the day, or what you logged it as by
+// hand under Bills with the same name; otherwise the amount that was planned.
+// History from before an edit (its retired copies) counts too.
+function learnRules(st, today) {
+    const rules = st.rules || [];
+    if (!rules.some((r) => r.vary && !r.retired))
+        return st;
+    const ov = st.overrides || {};
+    const norm = (t) => String(t || "").replace(/\s*\(.*\)/, "").trim().toLowerCase();
+    return { ...st, rules: rules.map((r) => {
+            if (!r.vary || r.retired)
+                return r;
+            const pts = [];
+            rules.filter((x) => x.id === r.id || x.id.startsWith(`${r.id}~`)).forEach((x) => {
+                occurrences({ ...x, est: undefined }, today - 800, today, ov).forEach((o) => {
+                    if (o.dn === today && ov[o.key]?.amt == null)
+                        return; // today's isn't known yet unless you've set it
+                    pts.push({ dn: o.dn, a: o.amt });
+                });
+            });
+            (st.logs || []).forEach((l) => { if (isBillLog(l) && norm(l.n) === norm(r.name) && isoToDn(l.d) <= today)
+                pts.push({ dn: isoToDn(l.d), a: l.a }); });
+            if (!pts.length)
+                return r;
+            pts.sort((a, b) => a.dn - b.dn);
+            const last = pts.slice(-3);
+            return { ...r, est: { from: today, avg: r2(last.reduce((t, p) => t + p.a, 0) / last.length), last, pts } };
+        }) };
+}
 function occurrences(rule, from, to, overrides = {}) {
     const out = [];
     if (!rule.active && rule.active !== undefined)
@@ -17352,7 +17393,7 @@ function occurrences(rule, from, to, overrides = {}) {
         const at = ov?.moveTo ? isoToDn(ov.moveTo) : dn;
         if (at < from || at > to)
             return;
-        out.push({ dn: at, origDn: dn, amt: ov?.amt ?? rule.amt, base: rule.amt, key, rule, overridden: !!ov, moved: !!ov?.moveTo });
+        out.push({ dn: at, origDn: dn, amt: ov?.amt ?? learnedAmt(rule, dn), base: rule.amt, key, rule, overridden: !!ov, moved: !!ov?.moveTo });
     };
     if (rule.freq === "once") {
         push(start);
@@ -17514,7 +17555,8 @@ function budgetRuleText(r) {
         bits.push(`spends of ${money(r.min, true)} or more`);
     return bits.length ? `Counts ${bits.join(", ")}.` : "";
 }
-function buildModel(state, SC = {}, todayOverride) {
+function buildModel(state0, SC = {}, todayOverride) {
+    const state = learnRules(state0, Math.max(todayOverride ?? todayDn(), isoToDn(state0.anchor.d)));
     const { anchor, logs, rules, overrides = {}, settings } = state;
     const A = isoToDn(anchor.d);
     const today = Math.max(todayOverride ?? todayDn(), A);
@@ -18368,7 +18410,8 @@ function LogTab({ ord = () => 0, show = () => true, pagesOn = [], st, M, openLog
 // transfers and budgets from Plan, plus anything you've logged ahead of today.
 // It never includes the learned day-to-day spending estimates, so it's the
 // macro picture: what's committed, and what's left over.
-function planFlows(st, from, to, today) {
+function planFlows(st0, from, to, today) {
+    const st = learnRules(st0, today);
     const ov = st.overrides || {};
     const f = { inc: [], bills: [], save: [], budgets: [], ahead: [] };
     for (const r of st.rules || []) {
@@ -18507,11 +18550,13 @@ function SavingsGoal({ o = 0, st, M, setSettings, onAddRule }) {
 /* ---------- Plan ---------- */
 function Plan({ ord = () => 0, show = () => true, st, M, editRule, editDaily, updRule }) {
     const futureOnce = (r) => r.freq !== "once" || isoToDn(r.start) >= M.today;
-    const next = (r) => occurrences(r, M.today, M.today + 800, st.overrides)[0];
+    // varying bills are read with what they've learned, so the next one shows its estimate
+    const learned = useMemo(() => Object.fromEntries(learnRules(st, M.today).rules.map((r) => [r.id, r])), [st, M.today]);
+    const next = (r) => occurrences(learned[r.id] || r, M.today, M.today + 800, st.overrides)[0];
     const rows = (list) => list.filter(futureOnce).map((r) => ({ r, n: next(r) })).sort((a, b) => (a.n?.dn ?? 1e9) - (b.n?.dn ?? 1e9));
     const groups = {};
     st.rules.filter((r) => r.kind === "bill" && !r.retired).forEach((r) => (groups[r.group || "Other Bills"] ||= []).push(r));
-    const Row = ({ r, n }) => (_jsx("li", { children: _jsxs("button", { onClick: () => editRule(r), children: [_jsxs("span", { className: "name", children: [_jsx(Name, { children: r.name }), _jsxs("small", { children: [describeRule(r), n ? ` · Next ${dl(n.dn, { weekday: "short", day: "numeric", month: "short" })}` : " · Nothing upcoming"] })] }), _jsx("span", { className: r.kind === "in" ? "pos" : "", children: money(r.amt, r.amt % 1 !== 0) })] }) }));
+    const Row = ({ r, n }) => (_jsx("li", { children: _jsxs("button", { onClick: () => editRule(r), children: [_jsxs("span", { className: "name", children: [_jsx(Name, { children: r.name }), _jsxs("small", { children: [describeRule(r), r.vary ? " · Varies" : "", n ? ` · Next ${dl(n.dn, { weekday: "short", day: "numeric", month: "short" })}` : " · Nothing Upcoming"] })] }), _jsx("span", { className: r.kind === "in" ? "pos" : "", children: r.vary && n ? `~${money(n.amt)}` : money(r.amt, r.amt % 1 !== 0) })] }) }));
     const Section = ({ title, list, kind, o = 0 }) => (_jsxs("section", { className: "card", style: { order: o }, children: [_jsxs("div", { className: "row-between", children: [_jsx("h2", { children: title }), _jsx("button", { className: "link", onClick: () => editRule({ kind, group: title }), children: "Add" })] }), _jsx("ul", { className: "items plan", children: rows(list).map((x) => _jsx(Row, { ...x }, x.r.id)) })] }));
     return (_jsxs(_Fragment, { children: [show("plan.in") && _jsx(Section, { o: ord("plan.in"), title: "Income", list: st.rules.filter((r) => r.kind === "in" && !r.retired), kind: "in" }), show("plan.save") && _jsx(Section, { o: ord("plan.save"), title: "Savings", list: st.rules.filter((r) => r.kind === "save" && !r.retired), kind: "save" }), show("plan.budget") && (_jsxs("section", { style: { order: ord("plan.budget") }, className: "card", children: [_jsxs("div", { className: "row-between", children: [_jsx("h2", { children: "Budgets" }), _jsx("button", { className: "link", onClick: () => editRule({ kind: "budget", group: "Budgets" }), children: "Add" })] }), _jsx("ul", { className: "items plan", children: M.budgetCheck.map(({ rule: r, actualPer }) => (_jsxs("li", { children: [_jsxs("button", { onClick: () => editRule(r), children: [_jsxs("span", { className: "name", children: [_jsx(Name, { children: r.name }), _jsxs("small", { children: [describeRule(r), " \u00B7 You Average ", money(actualPer)] }), M.budgetNow[catOf(r)] && _jsx(BudgetBar, { spent: M.budgetNow[catOf(r)].spent, alloc: M.budgetNow[catOf(r)].alloc })] }), _jsx("span", { children: money(r.amt) })] }), actualPer > r.amt * 1.1 && _jsxs("button", { className: "mini", onClick: () => updRule({ ...r, amt: Math.round(actualPer) }), children: ["Use ", money(actualPer)] })] }, r.id))) })] })), show("plan.daily") && (_jsxs("section", { style: { order: ord("plan.daily") }, className: "card", children: [_jsxs("div", { className: "row-between", children: [_jsx("h2", { children: "Everyday Spending" }), st.cats.some((c) => !st.daily[c]) && _jsx("button", { className: "link", onClick: () => editDaily("+"), children: "Add" })] }), _jsx("ul", { className: "items plan", children: Object.entries(st.daily).map(([cat, cfg]) => (_jsx("li", { children: _jsxs("button", { onClick: () => editDaily(cat), children: [_jsxs("span", { className: "name", children: [_jsx(Name, { children: cat }), _jsx("small", { children: cfg.mode === "manual" ? "Amounts You Set" : cfg.flat ? "Auto, Spread Evenly" : "Auto, By Day of the Week" })] }), _jsxs("span", { children: [money(M.rates[cat]?.perWeek || 0), "/wk"] })] }) }, cat))) })] })), show("plan.bills") && Object.entries(groups).map(([g, list]) => _jsx(Section, { o: ord("plan.bills"), title: g, list: list, kind: "bill" }, g)), show("plan.bills") && _jsxs("p", { className: "fine center", style: { order: ord("plan.bills") }, children: ["Regular bills come to about ", money(M.billsWk * 52 / 12), " a month."] })] }));
 }
@@ -18669,7 +18714,15 @@ function RuleSheet({ st, rule, onSave, onDelete, onClose, today }) {
         name: rule.name || "", kind: rule.kind || "bill", amt: rule.amt != null ? String(rule.amt) : "", freq: rule.freq || "monthly",
         every: rule.every || 21, start: nextOcc ? dnToISO(nextOcc.origDn ?? nextOcc.dn) : rule.start || dnToISO(today + 1), end: rule.end || "",
         shift: rule.shift || "", cat: rule.cat || st.cats[1], min: rule.min ? String(rule.min) : "", group: rule.group && !["Income", "Savings", "Budgets"].includes(rule.group) ? rule.group : "",
+        vary: !!rule.vary,
     });
+    // What a varying bill has learned so far, as if the switch were on now.
+    const learnt = useMemo(() => {
+        if (!rule.id)
+            return null;
+        const probe = { ...st, rules: st.rules.map((r) => (r.id === rule.id ? { ...r, vary: true, amt: +f.amt || r.amt } : r)) };
+        return learnRules(probe, today).rules.find((r) => r.id === rule.id) || null;
+    }, [st, rule.id, today, f.amt]);
     const set = (k) => (e) => setF({ ...f, [k]: e.target ? e.target.value : e });
     const groups = Array.from(new Set(st.rules.filter((r) => r.kind === "bill" && !r.retired).map((r) => r.group).filter(Boolean)));
     const preview = useMemo(() => {
@@ -18690,10 +18743,18 @@ function RuleSheet({ st, rule, onSave, onDelete, onClose, today }) {
             every: f.freq === "days" ? Math.max(1, +f.every || 1) : undefined, start: f.start, end: f.end || undefined,
             min: f.kind === "budget" && +f.min > 0 ? +f.min : undefined,
             shift: MONTH_STEP[f.freq] ? f.shift || undefined : undefined, cat: f.kind === "budget" ? f.cat : undefined,
+            vary: f.kind === "bill" && f.vary ? true : undefined,
             group: f.kind === "in" ? "Income" : f.kind === "save" ? "Savings" : f.kind === "budget" ? "Budgets" : f.group || "Other Bills", active: true,
         });
     };
-    return (_jsx(Sheet, { title: isNew ? `Add ${KIND_LABEL[f.kind]}` : rule.name, heading: isNew ? null : _jsx(Name, { children: rule.name }), onClose: onClose, children: _jsxs("div", { className: "form", children: [_jsxs("label", { children: ["Name", _jsx("input", { value: f.name, onChange: set("name") })] }), _jsx(Seg, { label: "Type", small: true, wrap: true, value: f.kind, onChange: set("kind"), options: [["in", "Income"], ["bill", "Bill"], ["budget", "Budget"], ["save", "Savings"]] }), _jsxs("div", { className: "form-row", children: [_jsxs("label", { children: ["Amount", _jsx("input", { inputMode: "decimal", value: f.amt, onChange: (e) => setF({ ...f, amt: clean(e.target.value) }) })] }), _jsxs("label", { children: ["How Often", _jsx("select", { value: f.freq, onChange: set("freq"), children: Object.entries(FREQS).map(([k, v]) => _jsx("option", { value: k, children: v.replace(" … ", " N ") }, k)) })] })] }), _jsxs("label", { className: "datefield", children: [f.freq === "once" ? "Date" : isNew ? "First Date" : "Next Date", _jsx("input", { type: "date", value: f.start, onChange: set("start") })] }), f.freq === "days" && _jsxs("label", { children: ["Every ", _jsx("span", { className: "qual", children: "Days" }), _jsx("input", { inputMode: "numeric", value: f.every, onChange: (e) => setF({ ...f, every: clean(e.target.value) }) })] }), f.freq !== "once" && f.freq !== "days" && _jsxs("label", { className: "datefield", children: ["Ends ", _jsx("span", { className: "qual", children: "Optional" }), _jsx("input", { type: "date", value: f.end, onChange: set("end") })] }), MONTH_STEP[f.freq] && _jsxs("label", { children: ["If It Lands on a Weekend", _jsxs("select", { value: f.shift, onChange: set("shift"), children: [_jsx("option", { value: "", children: "Keep the Date" }), _jsx("option", { value: "before", children: "Pay the Friday Before" }), _jsx("option", { value: "after", children: "Pay the Monday After" })] })] }), f.kind === "budget" && (_jsxs(_Fragment, { children: [_jsxs("label", { children: ["Uses Spends Logged As", _jsx("select", { value: f.cat, onChange: set("cat"), children: st.cats.map((c) => _jsx("option", { children: c }, c)) })] }), _jsxs("label", { children: ["Only Count Spends of at Least", _jsx("input", { inputMode: "decimal", placeholder: "Any amount", value: f.min, onChange: (e) => setF({ ...f, min: clean(e.target.value) }) })] }), _jsx("p", { className: "fine", children: "Leave this blank to count everything. Set it to keep small top-ups out of the budget, so it stays reserved for the big shop." })] })), f.kind === "bill" && _jsxs("label", { children: ["Group", _jsx("input", { list: "groups", value: f.group, placeholder: "Home, Car, Subscriptions", onChange: set("group") }), _jsx("datalist", { id: "groups", children: groups.map((g) => _jsx("option", { value: g }, g)) })] }), preview.length > 0 && (_jsxs("div", { className: "preview", children: [_jsx("small", { children: "Next Dates" }), _jsx("div", { children: preview.map((o) => _jsx("span", { children: dl(o.dn, { weekday: "short", day: "numeric", month: "short" }) }, o.dn)) }), MONTH_STEP[f.freq] && !f.shift && preview.some((o) => dowOf(o.dn) > 4) && _jsx("small", { className: "warn-txt", children: "One of these lands on a weekend. Set the weekend rule above if it actually comes out on a business day." })] })), _jsx("button", { className: "primary wide", disabled: !f.name.trim() || !+f.amt, onClick: save, children: isNew ? "Add to Plan" : "Save Changes" }), !isNew && _jsxs("button", { className: "danger wide", onClick: () => onDelete(rule), children: ["Delete ", rule.name] })] }) }));
+    return (_jsx(Sheet, { title: isNew ? `Add ${KIND_LABEL[f.kind]}` : rule.name, heading: isNew ? null : _jsx(Name, { children: rule.name }), onClose: onClose, children: _jsxs("div", { className: "form", children: [_jsxs("label", { children: ["Name", _jsx("input", { value: f.name, onChange: set("name") })] }), _jsx(Seg, { label: "Type", small: true, wrap: true, value: f.kind, onChange: set("kind"), options: [["in", "Income"], ["bill", "Bill"], ["budget", "Budget"], ["save", "Savings"]] }), _jsxs("div", { className: "form-row", children: [_jsxs("label", { children: [f.kind === "bill" && f.vary ? "Usual Amount" : "Amount", _jsx("input", { inputMode: "decimal", value: f.amt, onChange: (e) => setF({ ...f, amt: clean(e.target.value) }) })] }), _jsxs("label", { children: ["How Often", _jsx("select", { value: f.freq, onChange: set("freq"), children: Object.entries(FREQS).map(([k, v]) => _jsx("option", { value: k, children: v.replace(" … ", " N ") }, k)) })] })] }), f.kind === "bill" && (_jsxs("div", { className: "vary", children: [_jsxs("div", { className: "set tg", children: [_jsx("span", { children: "Amount Varies" }), _jsx(Toggle, { label: "Amount varies, learn from past bills", on: f.vary, onChange: (v) => setF({ ...f, vary: v }) })] }), f.vary && (() => {
+                            const est = learnt?.est;
+                            const nd = nextOcc ? nextOcc.origDn ?? nextOcc.dn : null;
+                            const ly = est && nd != null ? est.pts.find((p) => Math.abs(nd - 365 - p.dn) <= 21) : null;
+                            return est
+                                ? _jsxs("div", { className: "vary-est", children: [_jsxs("div", { className: "row-between", children: [_jsx("span", { children: "Next Bill Estimate" }), _jsx("b", { children: money(nd != null ? learnedAmt(learnt, nd) : est.avg, true) })] }), _jsx("small", { children: ly ? `Same Time Last Year: ${money(ly.a, true)}` : `Average of Last ${est.last.length}: ${est.last.map((p) => money(p.a, true)).join(", ")}` })] })
+                                : _jsx("p", { className: "fine", children: "No past bills yet, so it uses the usual amount until one comes through." });
+                        })()] })), _jsxs("label", { className: "datefield", children: [f.freq === "once" ? "Date" : isNew ? "First Date" : "Next Date", _jsx("input", { type: "date", value: f.start, onChange: set("start") })] }), f.freq === "days" && _jsxs("label", { children: ["Every ", _jsx("span", { className: "qual", children: "Days" }), _jsx("input", { inputMode: "numeric", value: f.every, onChange: (e) => setF({ ...f, every: clean(e.target.value) }) })] }), f.freq !== "once" && f.freq !== "days" && _jsxs("label", { className: "datefield", children: ["Ends ", _jsx("span", { className: "qual", children: "Optional" }), _jsx("input", { type: "date", value: f.end, onChange: set("end") })] }), MONTH_STEP[f.freq] && _jsxs("label", { children: ["If It Lands on a Weekend", _jsxs("select", { value: f.shift, onChange: set("shift"), children: [_jsx("option", { value: "", children: "Keep the Date" }), _jsx("option", { value: "before", children: "Pay the Friday Before" }), _jsx("option", { value: "after", children: "Pay the Monday After" })] })] }), f.kind === "budget" && (_jsxs(_Fragment, { children: [_jsxs("label", { children: ["Uses Spends Logged As", _jsx("select", { value: f.cat, onChange: set("cat"), children: st.cats.map((c) => _jsx("option", { children: c }, c)) })] }), _jsxs("label", { children: ["Only Count Spends of at Least", _jsx("input", { inputMode: "decimal", placeholder: "Any amount", value: f.min, onChange: (e) => setF({ ...f, min: clean(e.target.value) }) })] }), _jsx("p", { className: "fine", children: "Leave this blank to count everything. Set it to keep small top-ups out of the budget, so it stays reserved for the big shop." })] })), f.kind === "bill" && _jsxs("label", { children: ["Group", _jsx("input", { list: "groups", value: f.group, placeholder: "Home, Car, Subscriptions", onChange: set("group") }), _jsx("datalist", { id: "groups", children: groups.map((g) => _jsx("option", { value: g }, g)) })] }), preview.length > 0 && (_jsxs("div", { className: "preview", children: [_jsx("small", { children: "Next Dates" }), _jsx("div", { children: preview.map((o) => _jsx("span", { children: dl(o.dn, { weekday: "short", day: "numeric", month: "short" }) }, o.dn)) }), MONTH_STEP[f.freq] && !f.shift && preview.some((o) => dowOf(o.dn) > 4) && _jsx("small", { className: "warn-txt", children: "One of these lands on a weekend. Set the weekend rule above if it actually comes out on a business day." })] })), _jsx("button", { className: "primary wide", disabled: !f.name.trim() || !+f.amt, onClick: save, children: isNew ? "Add to Plan" : "Save Changes" }), !isNew && _jsxs("button", { className: "danger wide", onClick: () => onDelete(rule), children: ["Delete ", rule.name] })] }) }));
 }
 function DailySheet({ st, M, cat, onSave, onRemove, onClose }) {
     const cfg = st.daily[cat];
@@ -18782,7 +18843,7 @@ const stamp = (ts) => {
         return `${at} yesterday, ${on}`;
     return `${at} on ${d.toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short" })}`;
 };
-function SettingsPage({ st, setSettings, storageOk, onShared, onRestore, onCats, onSaved, onSync, hidden, onPage, hiddenSec = [], onSection, orderOf, onMove }) {
+function SettingsPage({ st, setSettings, storageOk, onShared, onRestore, onCats, onSaved, onSync, hidden, onPage, hiddenSec = [], onSection, orderOf, onMove, tabsInOrder = PAGE_TABS.map(([k]) => k), onMoveTab }) {
     const [openTab, setOpenTab] = useState({});
     const [backup, setBackup] = useState("");
     const [restore, setRestore] = useState("");
@@ -18794,11 +18855,12 @@ function SettingsPage({ st, setSettings, storageOk, onShared, onRestore, onCats,
     const fileRef = useRef(null);
     const stale = !st.lastBackup || Date.now() - st.lastBackup > 14 * DAYMS;
     const S = st.settings;
-    return (_jsxs(_Fragment, { children: [_jsxs("section", { className: "card", children: [_jsx("h2", { children: "Tabs" }), PAGE_TABS.map(([k, label]) => {
+    return (_jsxs(_Fragment, { children: [_jsxs("section", { className: "card", children: [_jsx("h2", { children: "Tabs" }), tabsInOrder.map((k, ti) => {
+                        const label = Object.fromEntries(PAGE_TABS)[k];
                         const on = !hidden.includes(k), open = on && !!openTab[k];
                         const names = Object.fromEntries(SECTIONS[k]);
                         const list = orderOf(k);
-                        return (_jsxs("div", { className: "pageset", children: [_jsxs("div", { className: "set tg", children: [_jsxs("button", { className: "tab-exp", "aria-expanded": open, disabled: !on, onClick: () => setOpenTab({ ...openTab, [k]: !openTab[k] }), children: [_jsx("i", { className: `chev${open ? " up" : ""}`, "aria-hidden": "true" }), _jsx("span", { children: label }), on && !open && _jsxs("small", { children: [list.filter((id) => !hiddenSec.includes(id)).length, " of ", list.length, " Showing"] })] }), _jsx(Toggle, { label: `Show ${label} tab`, on: on, onChange: (v) => onPage(k, v) })] }), open && (_jsx("div", { className: "subsets", children: list.map((id, i) => (_jsxs("div", { className: "set tg sub", children: [_jsx("span", { children: names[id] }), _jsxs("div", { className: "sub-ctl", children: [_jsx("button", { className: "mv", "aria-label": `Move ${names[id]} up`, disabled: i === 0, onClick: () => onMove(k, id, -1), children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: "M6.5 14.5 12 9l5.5 5.5" }) }) }), _jsx("button", { className: "mv", "aria-label": `Move ${names[id]} down`, disabled: i === list.length - 1, onClick: () => onMove(k, id, 1), children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: "M6.5 9.5 12 15l5.5-5.5" }) }) }), _jsx(Toggle, { label: `Show ${names[id]} on ${label}`, on: !hiddenSec.includes(id), onChange: (v) => onSection(k, id, v) })] })] }, id))) }))] }, k));
+                        return (_jsxs("div", { className: "pageset", children: [_jsxs("div", { className: "set tg", children: [_jsxs("button", { className: "tab-exp", "aria-expanded": open, disabled: !on, onClick: () => setOpenTab({ ...openTab, [k]: !openTab[k] }), children: [_jsx("i", { className: `chev${open ? " up" : ""}`, "aria-hidden": "true" }), _jsx("span", { children: label }), on && !open && _jsxs("small", { children: [list.filter((id) => !hiddenSec.includes(id)).length, " of ", list.length, " Showing"] })] }), _jsxs("div", { className: "sub-ctl", children: [_jsx("button", { className: "mv", "aria-label": `Move ${label} tab up`, disabled: ti === 0, onClick: () => onMoveTab(k, -1), children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: "M6.5 14.5 12 9l5.5 5.5" }) }) }), _jsx("button", { className: "mv", "aria-label": `Move ${label} tab down`, disabled: ti === tabsInOrder.length - 1, onClick: () => onMoveTab(k, 1), children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: "M6.5 9.5 12 15l5.5-5.5" }) }) }), _jsx(Toggle, { label: `Show ${label} tab`, on: on, onChange: (v) => onPage(k, v) })] })] }), open && (_jsx("div", { className: "subsets", children: list.map((id, i) => (_jsxs("div", { className: "set tg sub", children: [_jsx("span", { children: names[id] }), _jsxs("div", { className: "sub-ctl", children: [_jsx("button", { className: "mv", "aria-label": `Move ${names[id]} up`, disabled: i === 0, onClick: () => onMove(k, id, -1), children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: "M6.5 14.5 12 9l5.5 5.5" }) }) }), _jsx("button", { className: "mv", "aria-label": `Move ${names[id]} down`, disabled: i === list.length - 1, onClick: () => onMove(k, id, 1), children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: "M6.5 9.5 12 15l5.5-5.5" }) }) }), _jsx(Toggle, { label: `Show ${names[id]} on ${label}`, on: !hiddenSec.includes(id), onChange: (v) => onSection(k, id, v) })] })] }, id))) }))] }, k));
                     })] }), _jsxs("section", { className: "card", children: [_jsx("h2", { children: "Forecast" }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "buf", children: "Buffer to Keep in the Account" }), _jsx("input", { id: "buf", inputMode: "numeric", value: S.buffer, onChange: (e) => setSettings({ buffer: +clean(e.target.value) || 0 }) })] }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "cap", children: "Treat One-Off Spends Over This as Unusual" }), _jsx("input", { id: "cap", inputMode: "numeric", value: S.cap, onChange: (e) => setSettings({ cap: +clean(e.target.value) || 0 }) })] }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "wk", children: "Learn Spending From the Last" }), _jsx(Seg, { label: "Lookback", small: true, value: S.weeks, onChange: (v) => setSettings({ weeks: v }), options: [[4, "4 Weeks"], [8, "8 Weeks"], [12, "12 Weeks"]] })] })] }), _jsxs("section", { className: "card", children: [_jsx("h2", { children: "Categories" }), _jsx("div", { className: "chips", children: st.cats.map((c) => _jsxs("button", { className: "on", onClick: () => onCats(st.cats.filter((x) => x !== c)), children: [c, " \u00D7"] }, c)) }), _jsxs("div", { className: "form-row", children: [_jsx("input", { placeholder: "Add a category", value: cat, onChange: (e) => setCat(e.target.value) }), _jsx("button", { className: "ghost", disabled: !cat.trim(), onClick: () => { onCats([...st.cats, cat.trim()]); setCat(""); }, children: "Add" })] })] }), _jsxs("section", { className: "card", children: [_jsx("h2", { children: "Logging From Two Phones" }), _jsxs("div", { className: "set tg", children: [_jsx("span", { children: "Share With Anyone Who Has This Link" }), _jsx(Toggle, { label: "Shared mode", on: !!S.shared, onChange: onShared })] }), _jsx("p", { className: "fine", children: "Turn this on so both your entries land in the same place. Balances and notes are then visible to anyone who opens the link." })] }), _jsxs("section", { className: "card", children: [_jsx("h2", { children: "Google Drive Sync" }), _jsx("p", { className: "fine", children: "Keeps one file in your Drive. Once it's set up, anything you log or change goes up on its own a few seconds later, and the app pulls when you open it. The button below forces both right now. Setup instructions are in SETUP-SYNC.md." }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "syncurl", children: "Web App Link" }), _jsx("input", { id: "syncurl", placeholder: "https://script.google.com/\u2026/exec", value: S.syncUrl || "", onChange: (e) => setSettings({ syncUrl: e.target.value.trim() }) })] }), _jsxs("div", { className: "set", children: [_jsx("label", { htmlFor: "synctok", children: "Token" }), _jsx("input", { id: "synctok", placeholder: "The random string from the script", value: S.syncToken || "", onChange: (e) => setSettings({ syncToken: e.target.value.trim() }) })] }), _jsx("button", { className: "primary wide", disabled: !S.syncUrl || !S.syncToken || syncing, onClick: async () => {
                             setSyncing(true);
                             setSyncMsg("");
@@ -18840,6 +18902,7 @@ function MoneyApp() {
     const [hidden, setHidden] = useState([]);
     const [hiddenSec, setHiddenSec] = useState([]);
     const [secOrder, setSecOrder] = useState({});
+    const [tabOrder, setTabOrder] = useState([]);
     useEffect(() => {
         (async () => {
             const u = await sGet(UI_KEY, false);
@@ -18849,6 +18912,8 @@ function MoneyApp() {
                 setHiddenSec(u.sections);
             if (u && u.order && typeof u.order === "object")
                 setSecOrder(u.order);
+            if (u && Array.isArray(u.tabs))
+                setTabOrder(u.tabs);
         })();
     }, []);
     const show = (id) => !hiddenSec.includes(id);
@@ -18859,7 +18924,9 @@ function MoneyApp() {
         return [...saved, ...ids.filter((id) => !saved.includes(id))];
     };
     const ord = (id) => { const page = Object.keys(SECTIONS).find((k) => SECTIONS[k].some(([x]) => x === id)); return page ? orderOf(page).indexOf(id) : 0; };
-    const shown = PAGE_TABS.map(([k]) => k).filter((k) => !hidden.includes(k));
+    const allTabs = PAGE_TABS.map(([k]) => k);
+    const tabsInOrder = [...tabOrder.filter((k) => allTabs.includes(k)), ...allTabs.filter((k) => !tabOrder.includes(k))];
+    const shown = tabsInOrder.filter((k) => !hidden.includes(k));
     // if the page you're on gets hidden (or starts hidden), go to the first one showing
     useEffect(() => { if (tab !== "settings" && hidden.includes(tab))
         setTab(shown[0] || "settings"); }, [hidden, tab]);
@@ -19139,6 +19206,8 @@ function MoneyApp() {
     const addToPlan = (a) => saveRule({ id: uid(), name: a.name, kind: "bill", amt: a.amt, freq: "once", start: a.d, group: "Planned", active: true });
     const openLog = (init) => setModal({ type: "log", init });
     const openReview = () => { setLogView("review"); setTab("log"); };
+    // Layout choices are kept on this phone, all in one record.
+    const saveUI = (patch) => sSet(UI_KEY, { hidden, sections: hiddenSec, order: secOrder, tabs: tabOrder, ...patch }, false);
     // Show or hide a page. Remembered on this phone; at least one stays on.
     const setPage = (k, on) => {
         const next = on ? hidden.filter((x) => x !== k) : Array.from(new Set([...hidden, k]));
@@ -19147,7 +19216,7 @@ function MoneyApp() {
             return;
         }
         setHidden(next);
-        sSet(UI_KEY, { hidden: next, sections: hiddenSec, order: secOrder }, false);
+        saveUI({ hidden: next });
     };
     // Show or hide one section of a page. Each page keeps at least one.
     const setSection = (page, id, on) => {
@@ -19157,7 +19226,7 @@ function MoneyApp() {
             return;
         }
         setHiddenSec(next);
-        sSet(UI_KEY, { hidden, sections: next, order: secOrder }, false);
+        saveUI({ sections: next });
     };
     // Move a section up or down within its tab.
     const moveSection = (page, id, dir) => {
@@ -19167,7 +19236,16 @@ function MoneyApp() {
         [list[i], list[j]] = [list[j], list[i]];
         const next = { ...secOrder, [page]: list };
         setSecOrder(next);
-        sSet(UI_KEY, { hidden, sections: hiddenSec, order: next }, false);
+        saveUI({ order: next });
+    };
+    // Move a whole tab left or right in the tab bar.
+    const moveTab = (k, dir) => {
+        const list = [...tabsInOrder], i = list.indexOf(k), j = i + dir;
+        if (i < 0 || j < 0 || j >= list.length)
+            return;
+        [list[i], list[j]] = [list[j], list[i]];
+        setTabOrder(list);
+        saveUI({ tabs: list });
     };
     // Your call on whether an entry is a habit or a one-off. Stamped so it syncs.
     const markOneOff = (l, one) => up((s) => ({ ...s, logs: s.logs.map((x) => (x.id === l.id ? { ...x, oo: one, u: Date.now() } : x)) }));
@@ -19185,7 +19263,7 @@ function MoneyApp() {
                             await runSync();
                             setSyncing(false);
                         }, "aria-label": !syncCfg ? "Drive sync isn't set up. Tap to set it up."
-                            : st.lastSync ? `Last synced ${ago(st.lastSync).toLowerCase()}. Tap to sync now.` : "Never synced. Tap to sync now.", children: [_jsx("i", { className: syncCfg ? syncLight(st.lastSync) : "red" }), _jsx("span", { children: syncing ? "Syncing…" : !syncCfg ? "Not Set Up" : st.lastSync ? ago(st.lastSync) : "Never" })] })] }), tab !== "overview" && tab !== "settings" && (_jsxs("div", { className: "scorebar", ref: scoreRef, children: [_jsx("span", { children: "Current Balance" }), _jsx("b", { className: M.spNow < 0 ? "short" : "", children: money(M.spNow, true) })] })), !storageOk && _jsx("div", { className: "note warn", children: "Changes can't be saved in this view. Open the published app, or copy a backup from settings before closing." }), _jsxs("main", { className: "tab-view", children: [tab === "overview" && _jsx(Overview, { ord: ord, show: show, pagesOn: shown, st: st, M: M, sel: sel, setSel: setSel, openLog: openLog, openReview: openReview, openOverride: openOverride, onPending: setPending, go: setTab, openReconcile: () => setModal({ type: "reconcile" }), confirmAnchor: setAnchor }), tab === "forecast" && _jsx(Forecast, { ord: ord, show: show, st: st, M: M, setSettings: setSettings, SC: SC, setSC: setSC, openLog: openLog, addToPlan: addToPlan, openOverride: openOverride, addRule: saveRule }), tab === "budget" && _jsx(Budget, { ord: ord, show: show, st: st, M: M, setSettings: setSettings }), tab === "log" && _jsx(LogTab, { ord: ord, show: show, pagesOn: shown, st: st, M: M, openLog: openLog, openOverride: openOverride, go: setTab, view: logView, setView: setLogView, reviewProps: { onMark: markOneOff, onMove: moveLog, setSettings, notify: flash } }), tab === "settings" && _jsx(SettingsPage, { st: st, setSettings: setSettings, storageOk: storageOk, onShared: onShared, onCats: (cats) => up((s) => ({ ...s, cats }), true), onSaved: () => up((s) => ({ ...s, lastBackup: Date.now() })), onSync: runSync, onRestore: (s) => { setSt({ ...migrate(s), updated: Date.now(), cfgUpdated: Date.now() }); flash("Backup restored"); }, hidden: hidden, onPage: setPage, hiddenSec: hiddenSec, onSection: setSection, orderOf: orderOf, onMove: moveSection }), tab === "plan" && _jsx(Plan, { ord: ord, show: show, st: st, M: M, editRule: (r) => setModal({ type: "rule", r }), editDaily: (cat) => setModal({ type: "daily", cat }), updRule: saveRule })] }, tab), _jsxs("div", { className: "navwrap", children: [DOCK_TABS.includes(tab) && (_jsxs("div", { className: `dockbal${docked ? " on" : ""}`, "aria-hidden": !docked, children: [_jsx("span", { children: "Current Balance" }), _jsx("b", { className: M.spNow < 0 ? "short" : "", children: money(M.spNow, true) })] })), _jsxs("nav", { className: "navbar", role: "tablist", "aria-label": "Sections", children: [NAV.filter(([k]) => !hidden.includes(k)).map(([k, label, d]) => (_jsxs("button", { role: "tab", "aria-selected": tab === k, "aria-label": label, className: tab === k ? "on" : "", onClick: () => setTab(k), children: [_jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: d }) }), tab === k && _jsx("em", { children: label })] }, k))), _jsxs("button", { role: "tab", "aria-selected": tab === "settings", className: `nav-set${tab === "settings" ? " on" : ""}`, "aria-label": "Settings", onClick: () => setTab("settings"), children: [_jsxs("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: [_jsx("circle", { cx: "12", cy: "12", r: "3" }), _jsx("path", { d: "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" })] }), tab === "settings" && _jsx("em", { children: "Settings" })] }), _jsx("button", { className: "nav-add", onClick: () => openLog(logDay == null ? null : { d: dnToISO(logDay) }), "aria-label": "Log a spend or transfer", children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", "aria-hidden": "true", children: _jsx("path", { d: "M12 5v14M5 12h14" }) }) })] })] }), toast && _jsxs("div", { className: `toast${docked ? " up" : ""}`, role: "status", children: [_jsx("span", { children: toast.msg }), toast.undo && _jsx("button", { onClick: () => { toast.undo(); setToast(null); }, children: "Undo" })] }), _jsxs("div", { className: `modal-shell${closing ? " closing" : ""}`, children: [modal?.type === "log" && _jsx(LogSheet, { st: st, M: M, init: modal.init, onSave: saveLog, onSaveRule: saveRule, onDelete: deleteLog, onClose: () => shut() }), modal?.type === "rule" && _jsx(RuleSheet, { st: st, rule: modal.r, today: M.today, onSave: saveRule, onDelete: deleteRule, onClose: () => shut() }), modal?.type === "daily" && modal.cat === "+" && (_jsxs(Sheet, { title: "Add to Everyday Spending", onClose: () => shut(), children: [_jsx("p", { className: "fine", children: "Pick a category to forecast day by day. Anything already covered by a budget or a bill doesn't need one." }), _jsx("div", { className: "chips", children: st.cats.filter((c) => !st.daily[c]).map((c) => (_jsx("button", { onClick: () => { up((s) => ({ ...s, daily: { ...s.daily, [c]: { mode: "auto", flat: true } } }), true); setModal({ type: "daily", cat: c }); }, children: c }, c))) })] })), modal?.type === "daily" && modal.cat !== "+" && _jsx(DailySheet, { st: st, M: M, cat: modal.cat, onRemove: (cat) => { up((s) => { const d = { ...s.daily }; delete d[cat]; return { ...s, daily: d }; }, true); shut(); }, onSave: (cat, cfg) => { up((s) => ({ ...s, daily: { ...s.daily, [cat]: cfg } }), true); shut(); }, onClose: () => shut() }), modal?.type === "override" && _jsx(OverrideSheet, { o: modal.o, today: M.today, onSave: saveOverride, onConfirm: confirmSpend, onLogNew: (o) => openLog({ c: o.cat || o.name, d: dnToISO(o.dn) }), onClose: () => shut() }), modal?.type === "reconcile" && _jsx(ReconcileSheet, { M: M, st: st, onSave: setAnchor, onClose: () => shut() })] })] }));
+                            : st.lastSync ? `Last synced ${ago(st.lastSync).toLowerCase()}. Tap to sync now.` : "Never synced. Tap to sync now.", children: [_jsx("i", { className: syncCfg ? syncLight(st.lastSync) : "red" }), _jsx("span", { children: syncing ? "Syncing…" : !syncCfg ? "Not Set Up" : st.lastSync ? ago(st.lastSync) : "Never" })] })] }), tab !== "overview" && tab !== "settings" && (_jsxs("div", { className: "scorebar", ref: scoreRef, children: [_jsx("span", { children: "Current Balance" }), _jsx("b", { className: M.spNow < 0 ? "short" : "", children: money(M.spNow, true) })] })), !storageOk && _jsx("div", { className: "note warn", children: "Changes can't be saved in this view. Open the published app, or copy a backup from settings before closing." }), _jsxs("main", { className: "tab-view", children: [tab === "overview" && _jsx(Overview, { ord: ord, show: show, pagesOn: shown, st: st, M: M, sel: sel, setSel: setSel, openLog: openLog, openReview: openReview, openOverride: openOverride, onPending: setPending, go: setTab, openReconcile: () => setModal({ type: "reconcile" }), confirmAnchor: setAnchor }), tab === "forecast" && _jsx(Forecast, { ord: ord, show: show, st: st, M: M, setSettings: setSettings, SC: SC, setSC: setSC, openLog: openLog, addToPlan: addToPlan, openOverride: openOverride, addRule: saveRule }), tab === "budget" && _jsx(Budget, { ord: ord, show: show, st: st, M: M, setSettings: setSettings }), tab === "log" && _jsx(LogTab, { ord: ord, show: show, pagesOn: shown, st: st, M: M, openLog: openLog, openOverride: openOverride, go: setTab, view: logView, setView: setLogView, reviewProps: { onMark: markOneOff, onMove: moveLog, setSettings, notify: flash } }), tab === "settings" && _jsx(SettingsPage, { st: st, setSettings: setSettings, storageOk: storageOk, onShared: onShared, onCats: (cats) => up((s) => ({ ...s, cats }), true), onSaved: () => up((s) => ({ ...s, lastBackup: Date.now() })), onSync: runSync, onRestore: (s) => { setSt({ ...migrate(s), updated: Date.now(), cfgUpdated: Date.now() }); flash("Backup restored"); }, hidden: hidden, onPage: setPage, hiddenSec: hiddenSec, onSection: setSection, orderOf: orderOf, onMove: moveSection, tabsInOrder: tabsInOrder, onMoveTab: moveTab }), tab === "plan" && _jsx(Plan, { ord: ord, show: show, st: st, M: M, editRule: (r) => setModal({ type: "rule", r }), editDaily: (cat) => setModal({ type: "daily", cat }), updRule: saveRule })] }, tab), _jsxs("div", { className: "navwrap", children: [DOCK_TABS.includes(tab) && (_jsxs("div", { className: `dockbal${docked ? " on" : ""}`, "aria-hidden": !docked, children: [_jsx("span", { children: "Current Balance" }), _jsx("b", { className: M.spNow < 0 ? "short" : "", children: money(M.spNow, true) })] })), _jsxs("nav", { className: "navbar", role: "tablist", "aria-label": "Sections", children: [shown.map((k) => NAV.find(([n]) => n === k)).filter(Boolean).map(([k, label, d]) => (_jsxs("button", { role: "tab", "aria-selected": tab === k, "aria-label": label, className: tab === k ? "on" : "", onClick: () => setTab(k), children: [_jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.9", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: _jsx("path", { d: d }) }), tab === k && _jsx("em", { children: label })] }, k))), _jsxs("button", { role: "tab", "aria-selected": tab === "settings", className: `nav-set${tab === "settings" ? " on" : ""}`, "aria-label": "Settings", onClick: () => setTab("settings"), children: [_jsxs("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.8", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true", children: [_jsx("circle", { cx: "12", cy: "12", r: "3" }), _jsx("path", { d: "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" })] }), tab === "settings" && _jsx("em", { children: "Settings" })] }), _jsx("button", { className: "nav-add", onClick: () => openLog(logDay == null ? null : { d: dnToISO(logDay) }), "aria-label": "Log a spend or transfer", children: _jsx("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2.2", strokeLinecap: "round", "aria-hidden": "true", children: _jsx("path", { d: "M12 5v14M5 12h14" }) }) })] })] }), toast && _jsxs("div", { className: `toast${docked ? " up" : ""}`, role: "status", children: [_jsx("span", { children: toast.msg }), toast.undo && _jsx("button", { onClick: () => { toast.undo(); setToast(null); }, children: "Undo" })] }), _jsxs("div", { className: `modal-shell${closing ? " closing" : ""}`, children: [modal?.type === "log" && _jsx(LogSheet, { st: st, M: M, init: modal.init, onSave: saveLog, onSaveRule: saveRule, onDelete: deleteLog, onClose: () => shut() }), modal?.type === "rule" && _jsx(RuleSheet, { st: st, rule: modal.r, today: M.today, onSave: saveRule, onDelete: deleteRule, onClose: () => shut() }), modal?.type === "daily" && modal.cat === "+" && (_jsxs(Sheet, { title: "Add to Everyday Spending", onClose: () => shut(), children: [_jsx("p", { className: "fine", children: "Pick a category to forecast day by day. Anything already covered by a budget or a bill doesn't need one." }), _jsx("div", { className: "chips", children: st.cats.filter((c) => !st.daily[c]).map((c) => (_jsx("button", { onClick: () => { up((s) => ({ ...s, daily: { ...s.daily, [c]: { mode: "auto", flat: true } } }), true); setModal({ type: "daily", cat: c }); }, children: c }, c))) })] })), modal?.type === "daily" && modal.cat !== "+" && _jsx(DailySheet, { st: st, M: M, cat: modal.cat, onRemove: (cat) => { up((s) => { const d = { ...s.daily }; delete d[cat]; return { ...s, daily: d }; }, true); shut(); }, onSave: (cat, cfg) => { up((s) => ({ ...s, daily: { ...s.daily, [cat]: cfg } }), true); shut(); }, onClose: () => shut() }), modal?.type === "override" && _jsx(OverrideSheet, { o: modal.o, today: M.today, onSave: saveOverride, onConfirm: confirmSpend, onLogNew: (o) => openLog({ c: o.cat || o.name, d: dnToISO(o.dn) }), onClose: () => shut() }), modal?.type === "reconcile" && _jsx(ReconcileSheet, { M: M, st: st, onSave: setAnchor, onClose: () => shut() })] })] }));
 }
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap');
@@ -19527,6 +19605,10 @@ label.inline input{flex:1}
 .sheet>input,.sheet>.form-row{margin-top:10px}
 .logbody{overflow-x:hidden}
 .srcpick{margin-top:14px}
+.vary .set.tg{margin-top:4px}
+.vary-est{margin-top:10px;padding:11px 14px;border-radius:14px;background:var(--card2);border:1px solid var(--line)}
+.vary-est .row-between{font-size:13.5px}
+.vary-est small{display:block;margin-top:4px;font-size:12px;color:var(--muted)}
 /* Budget: one big figure, then the month's ins and outs */
 .bud-big{text-align:center;margin:14px 0 6px}
 .bud-big small{display:block;font-size:12px;color:var(--muted)}
