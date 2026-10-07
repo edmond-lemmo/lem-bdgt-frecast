@@ -17303,7 +17303,7 @@ function installStorageShim() {
 /* Starting data: rules and history imported from Budget_2026.xlsx. After that,
    everything lives in this app. */
 const SEED = { "v": 3, "updated": 0, "cfgUpdated": 0, "anchor": { "d": "2026-09-12", "ts": 0, "spending": 0, "savings": 0, "confirmed": false }, "logs": [], "rules": [], "overrides": {}, "deleted": [], "daily": { "Everyday": { "mode": "auto" }, "Shopping": { "mode": "auto", "flat": true } }, "cats": ["Everyday", "Groceries", "Parking", "Petrol", "Shopping", "Gift", "Bills"], "settings": { "buffer": 200, "weeks": 8, "cap": 250, "horizon": 31, "shared": false } };
-const BUILD = "07 Oct 2026 22:21";
+const BUILD = "07 Oct 2026 22:44";
 const DAYMS = 86400000;
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DOW_LONG = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -18035,6 +18035,13 @@ function migrate(s) {
     if (s?.cats && !s.cats.some((c) => c.toLowerCase() === "bills")) {
         s = { ...s, cats: [...s.cats, "Bills"] };
     }
+    // A history copy of an edited item can't reach into the future. An older
+    // build ended them the day before the new date, which kept payments you had
+    // moved or skipped (a savings transfer skipped for a month, say). Trim them.
+    if (s?.rules?.some((r) => r.retired && r.end && isoToDn(r.end) > todayDn())) {
+        const t = dnToISO(todayDn());
+        s = { ...s, rules: s.rules.map((r) => (r.retired && r.end && isoToDn(r.end) > todayDn() ? { ...r, end: t } : r)) };
+    }
     // "Other" is now "Shopping". Runs every load and on anything pulled from the
     // other phone, so entries from a phone still on an older version fold in too.
     if (s && ((s.cats || []).includes("Other") || (s.logs || []).some((l) => l.c === "Other")))
@@ -18075,17 +18082,23 @@ function applyRuleEdit(s, next, today) {
         return plain; // budgets only look forward
     const eff = isoToDn(next.start);
     const overrides = s.overrides || {};
-    const past = occurrences(old, from, eff - 1, overrides).filter((o) => o.origDn < eff);
+    // History only covers payments that have actually happened: up to today if
+    // today's has gone through, otherwise up to yesterday. Anything between now
+    // and the new date is what you're moving or skipping, so it isn't kept.
+    const todays = occurrences(old, today, today, overrides).find((o) => o.origDn === today);
+    const doneToday = todays ? !(overrides[todays.key]?.pending ?? old.kind === "bill") : true;
+    const upTo = Math.min(eff - 1, doneToday ? today : today - 1);
+    const past = occurrences(old, from, upTo, overrides).filter((o) => o.origDn <= upTo);
     if (!past.length)
         return plain;
     const pid = `${old.id}~${dnToISO(eff)}`;
-    const retired = { ...old, id: pid, end: dnToISO(eff - 1), retired: true };
+    const retired = { ...old, id: pid, end: dnToISO(upTo), retired: true };
     // anything recorded against a payment before the edit moves with the history
     const ov = {};
     for (const [k, v] of Object.entries(overrides)) {
         const bar = k.lastIndexOf("|");
         const rid = k.slice(0, bar), iso = k.slice(bar + 1);
-        if (rid === old.id && /^\d{4}-\d\d-\d\d$/.test(iso) && isoToDn(iso) < eff)
+        if (rid === old.id && /^\d{4}-\d\d-\d\d$/.test(iso) && isoToDn(iso) <= upTo)
             ov[`${pid}|${iso}`] = v;
         else
             ov[k] = v;
