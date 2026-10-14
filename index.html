@@ -17303,7 +17303,7 @@ function installStorageShim() {
 /* Starting data: rules and history imported from Budget_2026.xlsx. After that,
    everything lives in this app. */
 const SEED = { "v": 3, "updated": 0, "cfgUpdated": 0, "anchor": { "d": "2026-09-12", "ts": 0, "spending": 0, "savings": 0, "confirmed": false }, "logs": [], "rules": [], "overrides": {}, "deleted": [], "daily": { "Everyday": { "mode": "auto" }, "Shopping": { "mode": "auto", "flat": true } }, "cats": ["Everyday", "Groceries", "Parking", "Petrol", "Shopping", "Gift", "Bills"], "settings": { "buffer": 200, "weeks": 8, "cap": 250, "horizon": 31, "shared": false } };
-const BUILD = "08 Oct 2026 07:00";
+const BUILD = "14 Oct 2026 17:54";
 const DAYMS = 86400000;
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DOW_LONG = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -17581,12 +17581,22 @@ function buildModel(state0, SC = {}, todayOverride) {
     const pendingOf = (o, kind, dn) => overrides[o.key]?.pending ?? (kind === "bill" && dn === today);
     // Scheduled items on the day balances were set are already in that figure,
     // unless they were switched to "out" or moved onto that day afterwards.
+    // When balances are set, the sheet records which of that day's items were
+    // already in the figure (`anchor.inFig`); anything else that day still
+    // counts once it has gone through. Older saves fall back to timestamps.
     const changedSince = (o) => (overrides[o.key]?.at || 0) > (anchor.ts || 0);
+    const inFigure = (o) => (anchor.inFig ? !!anchor.inFig[o.key] : !changedSince(o));
+    const inBal = {};
     fixed.forEach((r) => occurrences(r, A, today, overrides).forEach((o) => {
-        if (o.dn === A && !changedSince(o))
+        if (o.dn === A && inFigure(o)) {
+            if (o.dn === today)
+                inBal[o.key] = true;
             return;
+        }
         if (pendingOf(o, r.kind, o.dn))
             return; // scheduled, but not in the account yet
+        if (o.dn === today)
+            inBal[o.key] = true;
         if (r.kind === "in")
             sp += o.amt;
         else if (r.kind === "save") {
@@ -17661,10 +17671,12 @@ function buildModel(state0, SC = {}, todayOverride) {
     // marked as not yet received, in which case today's projection adds it back.
     fixed.forEach((r) => occurrences(r, today, today, overrides).forEach((o) => {
         const pending = pendingOf(o, r.kind, today);
+        // still to land: either marked not in yet, or left out of the balance figure
+        const due = pending || !inBal[o.key];
         addEv(today, {
-            ...o, name: r.name, kind: r.kind, group: r.group, today: true, pending,
-            delta: pending ? (r.kind === "in" ? o.amt : -o.amt) : 0,
-            sav: pending && r.kind === "save" ? o.amt : 0,
+            ...o, name: r.name, kind: r.kind, group: r.group, today: true, pending: due, inBal: !!inBal[o.key],
+            delta: due ? (r.kind === "in" ? o.amt : -o.amt) : 0,
+            sav: due && r.kind === "save" ? o.amt : 0,
             shown: r.kind === "in" ? o.amt : o.amt,
         });
     }));
@@ -18804,9 +18816,19 @@ function OverrideSheet({ o, today, onSave, onConfirm, onLogNew, onClose }) {
                                 }) }), moved && _jsxs("p", { className: "fine", children: ["Moving from ", dl(o.dn), " to ", dl(isoToDn(when)), ", just this once."] })] })), o.budget && _jsx("p", { className: "fine", children: "Changing this affects this period only. Your usual budget stays as it is in Plan." }), o.daily ? (_jsxs(_Fragment, { children: [_jsxs("button", { className: "primary wide", disabled: !+amt, onClick: () => onConfirm(o, +amt), children: ["Log ", money(+amt || 0, true), " as Spent"] }), _jsx("button", { className: "ghost wide", onClick: () => onLogNew(o), children: "Log New Spend" }), _jsx("button", { className: "ghost wide", onClick: () => onSave(o.key, { skip: true }), children: "Expect Nothing This Day" })] })) : (_jsxs(_Fragment, { children: [_jsx("button", { className: "primary wide", onClick: save, children: moved && changed ? "Save New Amount and Day" : moved ? "Save New Day" : "Save" }), _jsx("button", { className: "ghost wide", onClick: () => onSave(o.key, { skip: true }), children: "Skip This One" })] }))] })), o.overridden && _jsx("button", { className: "link", onClick: () => onSave(o.key, null), children: "Reset to the Usual Amount and Day" })] }));
 }
 function ReconcileSheet({ M, st, onSave, onClose }) {
-    const [sp, setSp] = useState(M.spNow.toFixed(2));
-    const [sv, setSv] = useState(M.svNow.toFixed(2));
-    return (_jsxs(Sheet, { title: "Update Balances", onClose: onClose, children: [_jsxs("p", { className: "fine", children: ["Last set on ", dl(isoToDn(st.anchor.d), { weekday: "short", day: "numeric", month: "short" }), " to ", money(st.anchor.spending, true), " and ", money(st.anchor.savings, true), ". Everything logged since then is already counted, so only change these if the app has drifted from your bank."] }), _jsxs("div", { className: "form-row", children: [_jsxs("label", { children: ["Spending Account", _jsx("input", { inputMode: "decimal", value: sp, onChange: (e) => setSp(clean(e.target.value)) })] }), _jsxs("label", { children: ["Savings", _jsx("input", { inputMode: "decimal", value: sv, onChange: (e) => setSv(clean(e.target.value)) })] })] }), _jsxs("p", { className: "fine", children: ["Difference: ", money(+sp - M.spNow, true), " spending, ", money(+sv - M.svNow, true), " savings."] }), _jsx("button", { className: "primary wide", onClick: () => onSave(+sp || 0, +sv || 0), children: "Update Balances" })] }));
+    const todays = (M.days.find((d) => d.dn === M.today)?.events || []).filter((e) => e.today && !e.skip);
+    const [fig, setFig] = useState(() => Object.fromEntries(todays.map((e) => [e.key, e.inBal])));
+    // what the app expects the bank to show, given which of today's items are in
+    const shift = todays.reduce((a, e) => {
+        if (fig[e.key] === e.inBal)
+            return a;
+        const d = e.kind === "in" ? e.amt : -e.amt;
+        return a + (fig[e.key] ? d : -d);
+    }, 0);
+    const shiftSv = todays.reduce((a, e) => (e.kind !== "save" || fig[e.key] === e.inBal ? a : a + (fig[e.key] ? e.amt : -e.amt)), 0);
+    const [sp, setSp] = useState((M.spNow + shift).toFixed(2));
+    const [sv, setSv] = useState((M.svNow + shiftSv).toFixed(2));
+    return (_jsxs(Sheet, { title: "Update Balances", onClose: onClose, children: [_jsxs("p", { className: "fine", children: ["Last set on ", dl(isoToDn(st.anchor.d), { weekday: "short", day: "numeric", month: "short" }), " to ", money(st.anchor.spending, true), " and ", money(st.anchor.savings, true), ". Everything logged since then is already counted, so only change these if the app has drifted from your bank."] }), _jsxs("div", { className: "form-row", children: [_jsxs("label", { children: ["Spending Account", _jsx("input", { inputMode: "decimal", value: sp, onChange: (e) => setSp(clean(e.target.value)) })] }), _jsxs("label", { children: ["Savings", _jsx("input", { inputMode: "decimal", value: sv, onChange: (e) => setSv(clean(e.target.value)) })] })] }), todays.length > 0 && (_jsxs("div", { className: "due-today", children: [_jsx("div", { className: "ghead", children: "Due Today" }), todays.map((e) => (_jsxs("div", { className: "row", children: [_jsxs("span", { className: "name", children: [_jsx(Name, { children: e.name }), _jsxs("small", { children: [money(e.amt, true), " \u00B7 ", fig[e.key] ? "In These Figures" : "Not In Yet"] })] }), _jsx(Toggle, { on: !!fig[e.key], label: `${e.name} already in these figures`, onChange: (v) => setFig((f) => ({ ...f, [e.key]: v })) })] }, e.key)))] })), _jsxs("p", { className: "fine", children: ["Difference: ", money(+sp - (M.spNow + shift), true), " spending, ", money(+sv - (M.svNow + shiftSv), true), " savings."] }), _jsx("button", { className: "primary wide", onClick: () => onSave(+sp || 0, +sv || 0, fig), children: "Update Balances" })] }));
 }
 // Reads as a chip label next to the date, so it is title case.
 const ago = (ts) => {
@@ -19160,6 +19182,16 @@ function MoneyApp() {
             o[key] = rest;
         else
             delete o[key];
+        // Switching an item from the day balances were set means the figure
+        // didn't have it after all, so it counts again once it goes through.
+        const a = s.anchor;
+        if (key.endsWith(`|${a.d}`)) {
+            const inFig = { ...(a.inFig || {}) };
+            inFig[key] = false;
+            if (!pending)
+                o[key] = { ...(o[key] || {}), at: Date.now() };
+            return { ...s, overrides: o, anchor: { ...a, inFig: a.inFig ? inFig : undefined } };
+        }
         return { ...s, overrides: o };
     }, true);
     // Changing one payment keeps whether it has already gone through; moving it
@@ -19193,7 +19225,33 @@ function MoneyApp() {
         flash(`Logged ${money(log.a, true)} to ${cat}`, () => up((s) => ({ ...s, logs: s.logs.filter((x) => x.id !== log.id), deleted: [...(s.deleted || []), log.id] })));
     };
     const setSettings = (p) => up((s) => ({ ...s, settings: { ...s.settings, ...p } }), true);
-    const setAnchor = (spending, savings) => { up((s) => ({ ...s, anchor: { d: dnToISO(M.today), ts: Date.now(), spending, savings, confirmed: true } }), true); shut(); flash("Balances saved"); };
+    // `inFig` says which of today's scheduled items the figures already include.
+    // Without one (first setup), it is whatever the app had counted. Anything
+    // left out is marked as not in yet, and is switched on when it lands.
+    const setAnchor = (spending, savings, inFig) => {
+        const todays = (M.days.find((d) => d.dn === M.today)?.events || []).filter((e) => e.today);
+        const fig = {};
+        todays.forEach((e) => { fig[e.key] = inFig ? !!inFig[e.key] : e.inBal; });
+        up((s) => {
+            const o = { ...s.overrides };
+            todays.forEach((e) => {
+                const dflt = e.kind === "bill";
+                const rest = { ...(o[e.key] || {}) };
+                delete rest.pending;
+                delete rest.at;
+                const pending = !fig[e.key];
+                if (pending !== dflt)
+                    o[e.key] = { ...rest, pending };
+                else if (Object.keys(rest).length)
+                    o[e.key] = rest;
+                else
+                    delete o[e.key];
+            });
+            return { ...s, overrides: o, anchor: { d: dnToISO(M.today), ts: Date.now(), spending, savings, confirmed: true, inFig: fig } };
+        }, true);
+        shut();
+        flash("Balances Saved");
+    };
     const onShared = async (on) => {
         if (on) {
             const remote = migrate(await sGet(SHARED_KEY, true));
@@ -19412,6 +19470,7 @@ main{display:flex;flex-direction:column;gap:12px}
 .items li{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);font-size:14px}
 .items li:last-child{border-bottom:0}
 /* a heading inside a list, splitting bills from spending */
+.due-today{margin:4px 0 10px}.due-today .ghead{font-size:12px;letter-spacing:.05em;color:var(--muted);font-weight:600;padding:6px 0;border-bottom:1px solid var(--line)}.due-today .row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}.due-today .name{display:flex;flex-direction:column;min-width:0}.due-today small{color:var(--muted);font-size:12px}
 .items li.ghead{justify-content:space-between;padding:16px 0 7px;font-size:12px;letter-spacing:.05em;color:var(--muted);font-weight:600;border-bottom:1px solid var(--line)}
 .items li.ghead:first-child{padding-top:6px}
 /* review list: each entry gets its own Regular / One-Off choice */
