@@ -17303,7 +17303,7 @@ function installStorageShim() {
 /* Starting data: rules and history imported from Budget_2026.xlsx. After that,
    everything lives in this app. */
 const SEED = { "v": 3, "updated": 0, "cfgUpdated": 0, "anchor": { "d": "2026-09-12", "ts": 0, "spending": 0, "savings": 0, "confirmed": false }, "logs": [], "rules": [], "overrides": {}, "deleted": [], "daily": { "Everyday": { "mode": "auto" }, "Shopping": { "mode": "auto", "flat": true } }, "cats": ["Everyday", "Groceries", "Parking", "Petrol", "Shopping", "Gift", "Bills"], "settings": { "buffer": 200, "weeks": 8, "cap": 250, "horizon": 31, "shared": false } };
-const BUILD = "05 Nov 2026 06:49";
+const BUILD = "05 Nov 2026 07:08";
 const DAYMS = 86400000;
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DOW_LONG = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -18220,7 +18220,13 @@ function mergeStates(a, b) {
     [...a.logs, ...b.logs].forEach((l) => { const c = byId[l.id]; if (!c || (l.u || l.ts || 0) > (c.u || c.ts || 0))
         byId[l.id] = l; });
     const logs = Object.values(byId).filter((l) => !del.has(l.id)).sort((x, y) => (x.d < y.d ? -1 : x.d > y.d ? 1 : (x.ts || 0) - (y.ts || 0)));
-    const cfg = (a.cfgUpdated || 0) >= (b.cfgUpdated || 0) ? a : b;
+    // Bills, savings, income and budgets come from whichever side changed them
+    // last, except that a copy with none at all never wins over one that has
+    // them. A fresh copy (opened in a new browser, say) that has only had sync
+    // switched on looks newer, and must not wipe the plan everywhere else.
+    const empty = (s) => !(s.rules || []).length;
+    const cfg = empty(a) !== empty(b) ? (empty(a) ? b : a)
+        : (a.cfgUpdated || 0) >= (b.cfgUpdated || 0) ? a : b;
     // real balances always beat a phone that hasn't set any yet
     const anchor = a.anchor.confirmed !== b.anchor.confirmed
         ? (a.anchor.confirmed ? a.anchor : b.anchor)
